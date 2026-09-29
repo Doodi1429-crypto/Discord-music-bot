@@ -1,0 +1,31 @@
+{
+  "name": "discord-music-bot",
+  "version": "1.0.0",
+  "description": "A reliable, production-ready Discord music bot with 24/7 playback capability",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=24.17.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy-commands": "node src/deploy-commands.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [
+    "discord",
+    "music",
+    "bot",
+    "voice"
+  ],
+  "author": "Doodi1429-crypto",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "@discordjs/voice": "^0.16.1",
+    "@discordjs/opus": "^0.9.0",
+    "dotenv": "^16.3.1",
+    "ffmpeg-static": "^5.2.0"
+  },
+  "devDependencies": {}
+}
