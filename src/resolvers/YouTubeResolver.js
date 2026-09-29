@@ -1,12 +1,18 @@
-import youtubedl from 'youtube-dl-exec';
+import youtubedl, { create as createYoutubeDl } from 'youtube-dl-exec';
 import { UserInputError, AudioSourceError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 
 export class YouTubeResolver {
-  constructor({ timeout = 30_000 } = {}) {
+  constructor({ timeout = 30_000, binaryPath = process.env.YOUTUBE_DL_PATH } = {}) {
     this.timeout = timeout;
+    this.binaryPath = binaryPath || null;
+    // youtube-dl-exec ships its own yt-dlp binary via a postinstall download. Hosts that block
+    // install scripts or outbound network access (e.g. some restricted Node.js hosting
+    // providers) never get that binary even though the package resolves fine. Allow pointing at
+    // a system-installed yt-dlp/youtube-dl via YOUTUBE_DL_PATH in that case.
+    this.youtubedl = this.binaryPath ? createYoutubeDl(this.binaryPath) : youtubedl;
   }
 
   async resolveVideoId(videoId) {
@@ -41,6 +47,9 @@ export class YouTubeResolver {
       if (/private|unavailable|removed|not available|geo.?restricted/i.test(message)) {
         throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
       }
+      if (/enoent/i.test(message)) {
+        throw new AudioSourceError('yt-dlp executable was not found. Set YOUTUBE_DL_PATH to an installed yt-dlp/youtube-dl binary.');
+      }
       throw new AudioSourceError('Failed to resolve YouTube video. Please try another video.');
     }
   }
@@ -71,7 +80,7 @@ export class YouTubeResolver {
   }
 
   async getInfo(url, extraFlags = {}) {
-    return youtubedl(url, {
+    return this.youtubedl(url, {
       dumpSingleJson: true,
       noWarnings: true,
       format: 'bestaudio/best',
