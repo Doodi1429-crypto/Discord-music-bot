@@ -57,3 +57,17 @@ test('resolver validates searches and maps yt-dlp failures', async () => {
     execute: async () => { throw new Error('Command timed out'); }
   }).resolveVideoId(videoId), (error) => error instanceof AudioSourceError && error.message.includes('too long'));
 });
+
+test('resolver falls back to a system yt-dlp executable when the bundled binary is missing', async () => {
+  let fallbackCalls = 0;
+  const resolver = new YouTubeResolver({
+    execute: async () => { throw Object.assign(new Error('spawn yt-dlp ENOENT'), { code: 'ENOENT' }); },
+    fallbackExecute: async () => {
+      fallbackCalls += 1;
+      return { url: 'https://media.example/fallback', title: 'Fallback' };
+    }
+  });
+  const track = await resolver.resolveVideoId(videoId);
+  assert.equal(fallbackCalls, 1);
+  assert.equal(track.url, 'https://media.example/fallback');
+});

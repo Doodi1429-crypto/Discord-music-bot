@@ -23,23 +23,38 @@ function mapError(error) {
 }
 
 export class YouTubeResolver {
-  constructor({ timeout = 30_000, execute = ytDlp } = {}) {
+  constructor({
+    timeout = 30_000,
+    execute = ytDlp,
+    fallbackExecute = ytDlp.create(process.env.YT_DLP_PATH || 'yt-dlp')
+  } = {}) {
     this.timeout = timeout;
     this.execute = execute;
+    this.fallbackExecute = fallbackExecute;
   }
 
   async run(url, options) {
+    const executionOptions = {
+      timeout: this.timeout,
+      maxBuffer: 5 * 1024 * 1024
+    };
+    let info;
     try {
-      const info = await this.execute(url, options, {
-        timeout: this.timeout,
-        maxBuffer: 5 * 1024 * 1024
-      });
-      if (!info || typeof info !== 'object') throw new AudioSourceError('Could not read YouTube video information.');
-      return info;
+      info = await this.execute(url, options, executionOptions);
     } catch (error) {
-      if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
-      throw mapError(error);
+      const message = String(error?.message || error);
+      if (error?.code !== 'ENOENT' && !message.includes('ENOENT')) {
+        if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
+        throw mapError(error);
+      }
+      try {
+        info = await this.fallbackExecute(url, options, executionOptions);
+      } catch (fallbackError) {
+        throw mapError(fallbackError);
+      }
     }
+    if (!info || typeof info !== 'object') throw new AudioSourceError('Could not read YouTube video information.');
+    return info;
   }
 
   async resolveVideoId(videoId) {
