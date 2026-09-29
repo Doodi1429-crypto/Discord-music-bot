@@ -1,191 +1,84 @@
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import youtubedl from 'youtube-dl-exec';
 import { UserInputError, AudioSourceError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 
-const execPromise = promisify(exec);
+const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 
-/**
- * YouTube resolver using yt-dlp (maintained alternative to youtube-dl)
- * Handles video resolution and search via command-line execution
- */
 export class YouTubeResolver {
-  constructor() {
-    this.ytDlpPath = 'yt-dlp';
-    this.timeout = 30000; // 30 second timeout for yt-dlp operations
+  constructor({ timeout = 30_000 } = {}) {
+    this.timeout = timeout;
   }
 
-  /**
-   * Resolve a YouTube video ID to a playable audio URL
-   */
   async resolveVideoId(videoId) {
-    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      throw new UserInputError('Invalid YouTube video ID.');
+    }
+    return this.resolveVideoUrl(`https://www.youtube.com/watch?v=${videoId}`);
+  }
 
+  async resolveVideoUrl(url) {
     try {
-      const audioUrl = await this.extractAudioUrl(youtubeUrl);
-      if (!audioUrl) {
-        throw new AudioSourceError('Could not extract audio from this YouTube video.');
-      }
+      const info = await this.getInfo(url);
+      const audioUrl = info.requested_downloads?.find((item) => item.url)?.url
+        || (info.acodec && info.acodec !== 'none' ? info.url : null)
+        || info.formats?.find((format) => format.acodec && format.acodec !== 'none' && format.url)?.url;
 
-      // Fetch video title
-      const title = await this.getVideoTitle(youtubeUrl);
+      if (!audioUrl) {
+        throw new AudioSourceError('Could not extract a playable audio stream from this YouTube video.');
+      }
 
       return {
         url: audioUrl,
-        title: title || 'YouTube Video',
-        duration: null,
+        title: info.title || 'YouTube Video',
+        duration: info.duration ?? null,
         source: 'youtube'
       };
     } catch (error) {
-      if (error instanceof UserInputError || error instanceof AudioSourceError) {
-        throw error;
-      }
+      if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
 
-      const message = error.message || String(error);
-      if (message.includes('unavailable') || message.includes('not found')) {
-        throw new UserInputError('This YouTube video is unavailable (may be deleted, private, or region-locked).');
+      const message = error.stderr || error.message || String(error);
+      logger.error('YouTube video resolution failed', { message });
+      if (/private|unavailable|removed|not available|geo.?restricted/i.test(message)) {
+        throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
       }
-      if (message.includes('format') || message.includes('no formats')) {
-        throw new UserInputError('No audio formats available for this video.');
-      }
-
-      logger.error('YouTube video resolution failed', { videoId, message });
-      throw new AudioSourceError('Failed to resolve YouTube video. It may be unavailable.');
+      throw new AudioSourceError('Failed to resolve YouTube video. Please try another video.');
     }
   }
 
-  /**
-   * Search YouTube for a query and return first result
-   */
   async search(query) {
-    if (!query || query.trim().length < 2) {
+    const normalizedQuery = query?.trim();
+    if (!normalizedQuery || normalizedQuery.length < 2) {
       throw new UserInputError('Please provide a search query with at least 2 characters.');
     }
-
-    if (query.length > 200) {
-      throw new UserInputError('Search query is too long (max 200 characters).');
+    if (normalizedQuery.length > 200) {
+      throw new UserInputError('Search query is too long (maximum 200 characters).');
     }
 
     try {
-      const videoId = await this.searchYouTube(query);
-      if (!videoId) {
-        throw new UserInputError(`No YouTube results found for: "${query}"`);
-      }
+      const results = await this.getInfo(`${YOUTUBE_SEARCH_PREFIX}${normalizedQuery}`, { noPlaylist: false });
+      const firstResult = results.entries?.find((entry) => entry && (entry.id || entry.url || entry.webpage_url));
+      if (!firstResult) throw new UserInputError(`No YouTube results found for: "${normalizedQuery}"`);
 
-      // Now resolve the found video to get audio URL
-      return await this.resolveVideoId(videoId);
+      const videoUrl = firstResult.webpage_url
+        || (firstResult.id ? `https://www.youtube.com/watch?v=${firstResult.id}` : firstResult.url);
+      if (!videoUrl) throw new UserInputError(`No playable YouTube results found for: "${normalizedQuery}"`);
+      return await this.resolveVideoUrl(videoUrl);
     } catch (error) {
-      if (error instanceof UserInputError || error instanceof AudioSourceError) {
-        throw error;
-      }
-
-      logger.error('YouTube search failed', { query, message: error.message });
-      throw new AudioSourceError(`Failed to search YouTube for: "${query}"`);
+      if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
+      logger.error('YouTube search failed', { query: normalizedQuery, message: error.message });
+      throw new AudioSourceError(`Failed to search YouTube for: "${normalizedQuery}"`);
     }
   }
 
-  /**
-   * Extract direct audio URL from YouTube using yt-dlp
-   * Returns best available audio stream URL
-   */
-  async extractAudioUrl(youtubeUrl) {
-    const format = 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best';
-    const command = [
-      this.ytDlpPath,
-      '--quiet',
-      '--no-warnings',
-      '-f',
-      format,
-      '-g', // Get direct URL only (no download)
-      youtubeUrl
-    ].join(' ');
-
-    try {
-      const { stdout } = await this.executeWithTimeout(command);
-      const url = stdout.trim().split('\n')[0];
-      if (!url || !url.startsWith('http')) {
-        return null;
-      }
-      return url;
-    } catch (error) {
-      const stderr = error.stderr || error.message;
-      if (stderr.includes('unavailable')) {
-        throw new UserInputError('This video is unavailable.');
-      }
-      if (stderr.includes('PrivateVideo')) {
-        throw new UserInputError('This is a private video.');
-      }
-      if (stderr.includes('VideoRemoved')) {
-        throw new UserInputError('This video has been removed.');
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Get video title from YouTube
-   */
-  async getVideoTitle(youtubeUrl) {
-    const command = [
-      this.ytDlpPath,
-      '--quiet',
-      '--no-warnings',
-      '-e', // Get title only
-      youtubeUrl
-    ].join(' ');
-
-    try {
-      const { stdout } = await this.executeWithTimeout(command);
-      return stdout.trim() || null;
-    } catch {
-      return null; // Fail gracefully, use default title
-    }
-  }
-
-  /**
-   * Search YouTube for a query and return first video ID
-   */
-  async searchYouTube(query) {
-    const searchUrl = `ytsearch1:${query}`;
-    const command = [
-      this.ytDlpPath,
-      '--quiet',
-      '--no-warnings',
-      '--skip-download',
-      '-e', // Get title only
-      '-o',
-      '%(id)s', // Output video ID
-      searchUrl
-    ].join(' ');
-
-    try {
-      const { stdout } = await this.executeWithTimeout(command);
-      const videoId = stdout.trim();
-      return videoId || null;
-    } catch (error) {
-      logger.warn('YouTube search error', { query, message: error.message });
-      return null;
-    }
-  }
-
-  /**
-   * Execute command with timeout protection
-   */
-  async executeWithTimeout(command) {
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error('yt-dlp command timed out'));
-      }, this.timeout);
-
-      execPromise(command)
-        .then((result) => {
-          clearTimeout(timeoutId);
-          resolve(result);
-        })
-        .catch((error) => {
-          clearTimeout(timeoutId);
-          reject(error);
-        });
+  async getInfo(url, extraFlags = {}) {
+    return youtubedl(url, {
+      dumpSingleJson: true,
+      noWarnings: true,
+      format: 'bestaudio/best',
+      ...extraFlags
+    }, {
+      timeout: this.timeout,
+      killSignal: 'SIGKILL'
     });
   }
 }

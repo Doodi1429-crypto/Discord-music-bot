@@ -1,6 +1,4 @@
-/**
- * Check if string is a valid HTTP(S) URL
- */
+/** Check whether a string is a valid HTTP(S) URL. */
 export function isValidUrl(input) {
   try {
     const url = new URL(input);
@@ -10,53 +8,43 @@ export function isValidUrl(input) {
   }
 }
 
-/**
- * Check if URL is a YouTube URL
- */
+/** Check whether a URL belongs to YouTube or one of its subdomains. */
 export function isYouTubeUrl(input) {
   try {
     const url = new URL(input);
     const hostname = url.hostname.toLowerCase();
-    return (
-      hostname === 'youtube.com' ||
-      hostname === 'www.youtube.com' ||
-      hostname === 'youtu.be' ||
-      hostname === 'www.youtu.be'
-    );
+    return hostname === 'youtu.be'
+      || hostname.endsWith('.youtu.be')
+      || hostname === 'youtube.com'
+      || hostname.endsWith('.youtube.com');
   } catch {
     return false;
   }
 }
 
-/**
- * Extract YouTube video ID from URL
- * Supports:
- * - youtube.com/watch?v=<id>
- * - youtu.be/<id>
- */
+/** Extract a video ID from standard, short, Shorts, live, or embed URLs. */
 export function extractVideoId(input) {
   try {
     const url = new URL(input);
     const hostname = url.hostname.toLowerCase();
+    let id = null;
 
-    if (hostname === 'youtu.be' || hostname === 'www.youtu.be') {
-      // Short form: youtu.be/<id>
-      const id = url.pathname.slice(1).split('?')[0];
-      return isValidVideoId(id) ? id : null;
+    if (hostname === 'youtu.be' || hostname.endsWith('.youtu.be')) {
+      id = url.pathname.split('/').filter(Boolean)[0];
+    } else if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com')) {
+      id = url.searchParams.get('v');
+      if (!id) {
+        const match = url.pathname.match(/^\/(?:shorts|live|embed|v)\/([^/]+)/);
+        id = match?.[1] || null;
+      }
     }
 
-    if (hostname === 'youtube.com' || hostname === 'www.youtube.com') {
-      // Full form: youtube.com/watch?v=<id>
-      const id = url.searchParams.get('v');
-      return id && isValidVideoId(id) ? id : null;
-    }
-  } catch {}
-  return null;
+    return isValidVideoId(id) ? id : null;
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Validate YouTube video ID format (11 alphanumeric characters)
- */
 export function isValidVideoId(id) {
-  return /^[a-zA-Z0-9_-]{11}$/.test(id);
+  return typeof id === 'string' && /^[a-zA-Z0-9_-]{11}$/.test(id);
 }

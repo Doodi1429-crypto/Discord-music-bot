@@ -1,7 +1,7 @@
 {
   "name": "discord-music-bot",
   "version": "1.0.0",
-  "description": "A reliable Discord music bot using direct, publicly accessible media URLs.",
+  "description": "A Discord music bot supporting YouTube URLs, YouTube searches, and direct media URLs.",
   "type": "module",
   "main": "src/index.js",
   "engines": { "node": ">=24.17.0" },
@@ -15,6 +15,7 @@
     "@discordjs/voice": "^0.18.0",
     "discord.js": "^14.24.2",
     "dotenv": "^16.6.1",
-    "ffmpeg-static": "^5.2.0"
+    "ffmpeg-static": "^5.2.0",
+    "youtube-dl-exec": "^3.1.15"
   }
 }
