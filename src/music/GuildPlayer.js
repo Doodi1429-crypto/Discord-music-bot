@@ -4,14 +4,14 @@ import { UserInputError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 
 export class GuildPlayer {
-  constructor(guild, { ffmpegPath }) {
+  constructor(guild, { ffmpegPath, source = new AudioSource({ ffmpegPath }), player = createAudioPlayer() } = {}) {
     this.guild = guild;
     this.queue = [];
     this.current = null;
     this.connection = null;
     this.resource = null;
-    this.player = createAudioPlayer();
-    this.source = new AudioSource({ ffmpegPath });
+    this.player = player;
+    this.source = source;
     this.starting = false;
     this.player.on(AudioPlayerStatus.Idle, () => this.finishCurrent());
     this.player.on('error', (error) => { logger.error('Audio player error', { guild: guild.id, message: error.message }); this.cleanupResource(); this.finishCurrent(); });
@@ -59,7 +59,9 @@ export class GuildPlayer {
       this.cleanupResource();
       this.current = null;
       this.starting = false;
-      if (this.queue.length) return this.playNext();
+      if (this.queue.length) {
+        void this.playNext().catch((nextError) => logger.error('Queue playback failed', { guild: this.guild.id, message: nextError.message }));
+      }
       throw error;
     }
     this.starting = false;

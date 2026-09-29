@@ -4,8 +4,8 @@ import { logger } from '../utils/logger.js';
 import { UserInputError } from '../utils/errors.js';
 
 export class SourceResolver {
-  constructor() {
-    this.youtubeResolver = new YouTubeResolver();
+  constructor({ youtubeResolver = new YouTubeResolver() } = {}) {
+    this.youtubeResolver = youtubeResolver;
   }
 
   /**

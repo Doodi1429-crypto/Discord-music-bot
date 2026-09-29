@@ -17,12 +17,7 @@ export function isYouTubeUrl(input) {
   try {
     const url = new URL(input);
     const hostname = url.hostname.toLowerCase();
-    return (
-      hostname === 'youtube.com' ||
-      hostname === 'www.youtube.com' ||
-      hostname === 'youtu.be' ||
-      hostname === 'www.youtu.be'
-    );
+    return ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be'].includes(hostname);
   } catch {
     return false;
   }
@@ -45,9 +40,9 @@ export function extractVideoId(input) {
       return isValidVideoId(id) ? id : null;
     }
 
-    if (hostname === 'youtube.com' || hostname === 'www.youtube.com') {
-      // Full form: youtube.com/watch?v=<id>
-      const id = url.searchParams.get('v');
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(hostname)) {
+      const pathId = url.pathname.match(/^\/(?:shorts|embed|live)\/([^/?]+)/)?.[1];
+      const id = url.searchParams.get('v') || pathId;
       return id && isValidVideoId(id) ? id : null;
     }
   } catch {}
