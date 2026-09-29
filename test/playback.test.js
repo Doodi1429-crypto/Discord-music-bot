@@ -33,10 +33,15 @@ test('YouTube audio bypasses direct-file HEAD checks and cleans up FFmpeg', asyn
     ffmpegPath: 'ffmpeg-test',
     spawnProcess: (...args) => { calls.push(args); return child; }
   });
-  const resource = await source.create({ url: 'https://media.example/signed-audio', source: 'youtube' });
+  const resource = await source.create({
+    url: 'https://media.example/signed-audio',
+    source: 'youtube',
+    headers: { 'User-Agent': 'test-agent', Referer: 'https://youtube.com/', Injection: 'bad\r\n-i pipe:2' }
+  });
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'ffmpeg-test');
   assert.equal(calls[0][1][calls[0][1].indexOf('-i') + 1], 'https://media.example/signed-audio');
+  assert.equal(calls[0][1][calls[0][1].indexOf('-headers') + 1], 'User-Agent: test-agent\r\nReferer: https://youtube.com/\r\n');
   resource.cleanup();
   assert.equal(child.killed, true);
 });

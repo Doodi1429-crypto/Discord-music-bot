@@ -61,6 +61,7 @@ export class YouTubeResolver {
       url: audioUrl,
       title: info.title || 'YouTube Video',
       duration: Number.isFinite(info.duration) ? info.duration : null,
+      headers: info.http_headers || {},
       source: 'youtube'
     };
   }

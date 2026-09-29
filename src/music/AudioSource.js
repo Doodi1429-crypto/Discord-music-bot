@@ -44,11 +44,15 @@ export class AudioSource {
       }
     }
 
-    const process = this.spawnProcess(this.ffmpegPath, [
-      '-hide_banner', '-loglevel', 'error', '-nostdin', '-reconnect', '1',
-      '-reconnect_streamed', '1', '-reconnect_delay_max', '5', '-i', url.href,
-      '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5'];
+    const headers = Object.entries(track.headers || {})
+      .filter(([key, value]) => /^[\w-]+$/.test(key) && typeof value === 'string' && !/[\r\n]/.test(value))
+      .map(([key, value]) => `${key}: ${value}\r\n`)
+      .join('');
+    if (headers) args.push('-headers', headers);
+    args.push('-i', url.href, '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1');
+
+    const process = this.spawnProcess(this.ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let settled = false;
     const stream = Readable.from(process.stdout);

@@ -29,6 +29,7 @@ test('resolver handles YouTube URLs, text searches, and direct media URLs', asyn
     url: 'https://media.example/audio.webm',
     title: 'A song',
     duration: 42,
+    headers: {},
     source: 'youtube'
   });
   assert.equal(calls[0].executionOptions.timeout, 1234);
