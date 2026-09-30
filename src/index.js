@@ -54,8 +54,9 @@ loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
     logger.error('Login failed', { message: error.message });
     // Don't await destroy(): on the exact failure this guards against (a stuck/blackholed
     // connection), destroy() could hang for the same reason login did, which would defeat the
-    // point of exiting promptly. Let it run best-effort in the background.
-    client.destroy().catch(() => {});
+    // point of exiting promptly. Let it run best-effort in the background, and guard against a
+    // synchronous throw so it can never prevent the exit below.
+    try { client.destroy().catch(() => {}); } catch { /* best-effort cleanup only */ }
     // setImmediate gives the logger's synchronous console write and the destroy() call above a
     // turn of the event loop before the process terminates; exit explicitly since a hung
     // connection's open sockets could otherwise keep the event loop alive indefinitely.
