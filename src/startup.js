@@ -1,5 +1,12 @@
 export const DEFAULT_LOGIN_TIMEOUT_MS = 30_000;
 
+function loginTimeoutMessage(timeoutMs) {
+  return `Timed out after ${timeoutMs}ms waiting for Discord login to complete. `
+    + 'The process never received a response from Discord\'s gateway - this usually means '
+    + 'outbound WebSocket/HTTPS traffic to discord.com is being blocked, dropped, or proxied '
+    + 'by the host/firewall. Verify the host allows outbound connections to discord.com.';
+}
+
 /**
  * Wraps client.login() with a timeout.
  *
@@ -27,12 +34,7 @@ export function loginWithTimeout(client, token, { timeoutMs = DEFAULT_LOGIN_TIME
     // a hang instead of the process idling forever, so it must be allowed to keep the event
     // loop alive until either login settles or the timeout fires.
     const timer = setTimeout(() => {
-      finish(() => reject(new Error(
-        `Timed out after ${timeoutMs}ms waiting for Discord login to complete. `
-        + 'The process never received a response from Discord\'s gateway - this usually means '
-        + 'outbound WebSocket/HTTPS traffic to discord.com is being blocked, dropped, or proxied '
-        + 'by the host/firewall. Verify the host allows outbound connections to discord.com.'
-      )));
+      finish(() => reject(new Error(loginTimeoutMessage(timeoutMs))));
     }, timeoutMs);
 
     client.login(token).then(

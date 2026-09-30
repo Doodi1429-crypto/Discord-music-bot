@@ -46,6 +46,10 @@ client.on('voiceStateUpdate', (oldState, newState) => {
   if (oldState.member?.id !== client.user?.id || newState.channelId) return;
   manager.remove(oldState.guild.id);
 });
+function safeDestroy(destroyableClient) {
+  try { destroyableClient.destroy().catch(() => {}); } catch { /* best-effort cleanup only */ }
+}
+
 process.on('SIGINT', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
 process.on('SIGTERM', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
 logger.info('Connecting to Discord gateway...');
@@ -54,9 +58,8 @@ loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
     logger.error('Login failed', { message: error.message });
     // Don't await destroy(): on the exact failure this guards against (a stuck/blackholed
     // connection), destroy() could hang for the same reason login did, which would defeat the
-    // point of exiting promptly. Let it run best-effort in the background, and guard against a
-    // synchronous throw so it can never prevent the exit below.
-    try { client.destroy().catch(() => {}); } catch { /* best-effort cleanup only */ }
+    // point of exiting promptly. Let it run best-effort in the background.
+    safeDestroy(client);
     // setImmediate gives the logger's synchronous console write and the destroy() call above a
     // turn of the event loop before the process terminates; exit explicitly since a hung
     // connection's open sockets could otherwise keep the event loop alive indefinitely.
