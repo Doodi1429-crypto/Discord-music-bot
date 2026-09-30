@@ -50,8 +50,11 @@ process.on('SIGINT', () => { manager.destroyAll(); client.destroy(); process.exi
 process.on('SIGTERM', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
 logger.info('Connecting to Discord gateway...');
 loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
-  .catch(error => {
+  .catch(async error => {
     logger.error('Login failed', { message: error.message });
     process.exitCode = 1;
-    client.destroy().catch(() => {});
+    await client.destroy().catch(() => {});
+    // A hung/stuck gateway connection can leave open sockets that keep the event loop alive
+    // indefinitely even after destroy(); exit explicitly so the host's process manager restarts it.
+    process.exit(1);
   });

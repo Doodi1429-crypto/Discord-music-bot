@@ -16,6 +16,9 @@ export function loginWithTimeout(client, token, { timeoutMs = DEFAULT_LOGIN_TIME
   return new Promise((resolve, reject) => {
     let settled = false;
 
+    // Deliberately not unref()'d: this timer is what guarantees we actually detect and report
+    // a hang instead of the process idling forever, so it must be allowed to keep the event
+    // loop alive until either login settles or the timeout fires.
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
