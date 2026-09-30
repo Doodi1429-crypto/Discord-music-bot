@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { DEFAULT_LOGIN_TIMEOUT_MS } from './startup.js';
 
 const required = ['DISCORD_TOKEN', 'CLIENT_ID'];
 
@@ -15,11 +16,14 @@ export function loadConfig() {
     throw new Error('CLIENT_ID must be a Discord application snowflake.');
   }
 
+  const loginTimeoutMs = Number(process.env.LOGIN_TIMEOUT_MS);
+
   return {
     token: process.env.DISCORD_TOKEN,
     clientId: process.env.CLIENT_ID,
     guildId: process.env.GUILD_ID || null,
     ffmpegPath: process.env.FFMPEG_PATH || null,
-    logLevel: process.env.LOG_LEVEL || 'info'
+    logLevel: process.env.LOG_LEVEL || 'info',
+    loginTimeoutMs: Number.isFinite(loginTimeoutMs) && loginTimeoutMs > 0 ? loginTimeoutMs : DEFAULT_LOGIN_TIMEOUT_MS
   };
 }

@@ -1,0 +1,45 @@
+export const DEFAULT_LOGIN_TIMEOUT_MS = 30_000;
+
+/**
+ * Wraps client.login() with a timeout.
+ *
+ * On some restrictive hosts (e.g. WispByte) outbound traffic to Discord's gateway can be
+ * silently dropped by a firewall/proxy: the TCP/WebSocket handshake never completes, but it
+ * also never errors out. discord.js has no built-in timeout for this, so client.login()'s
+ * returned promise simply never settles - the process just sits there forever after printing
+ * nothing, with no way to tell a hang apart from a slow-but-working connection.
+ *
+ * This wraps that promise in a race against a timer so a hang like that surfaces as a clear,
+ * actionable error instead of silence.
+ */
+export function loginWithTimeout(client, token, { timeoutMs = DEFAULT_LOGIN_TIMEOUT_MS } = {}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(
+        `Timed out after ${timeoutMs}ms waiting for Discord login to complete. `
+        + 'The process never received a response from Discord\'s gateway - this usually means '
+        + 'outbound WebSocket/HTTPS traffic to discord.com is being blocked, dropped, or proxied '
+        + 'by the host/firewall. Verify the host allows outbound connections to discord.com.'
+      ));
+    }, timeoutMs);
+
+    client.login(token).then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}

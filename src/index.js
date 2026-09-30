@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { MusicManager } from './music/MusicManager.js';
 import { userMessage } from './utils/errors.js';
 import { logger } from './utils/logger.js';
+import { loginWithTimeout } from './startup.js';
 import { data as join, execute as joinExecute } from './commands/join.js';
 import { data as play, execute as playExecute } from './commands/play.js';
 import { data as pause, execute as pauseExecute } from './commands/pause.js';
@@ -27,6 +28,8 @@ const manager = new MusicManager(config);
 const commandMap = new Collection(commands.map(command => [command.data.name, command]));
 
 client.once('ready', ready => logger.info(`Logged in as ${ready.user.tag}`));
+client.on('error', error => logger.error('Client error', { message: error.message }));
+client.on('shardError', error => logger.error('Shard connection error', { message: error.message }));
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand() || !interaction.guild) return;
   const command = commandMap.get(interaction.commandName);
@@ -45,4 +48,10 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 });
 process.on('SIGINT', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
 process.on('SIGTERM', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
-client.login(config.token).catch(error => { logger.error('Login failed', { message: error.message }); process.exitCode = 1; });
+logger.info('Connecting to Discord gateway...');
+loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
+  .catch(error => {
+    logger.error('Login failed', { message: error.message });
+    process.exitCode = 1;
+    client.destroy().catch(() => {});
+  });
