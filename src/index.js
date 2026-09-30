@@ -55,6 +55,8 @@ loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
     process.exitCode = 1;
     await client.destroy().catch(() => {});
     // A hung/stuck gateway connection can leave open sockets that keep the event loop alive
-    // indefinitely even after destroy(); exit explicitly so the host's process manager restarts it.
-    process.exit(1);
+    // indefinitely even after destroy(); exit explicitly so the host's process manager restarts
+    // it. setImmediate gives the logger's synchronous console writes a turn of the event loop
+    // to flush before the process terminates.
+    setImmediate(() => process.exit(1));
   });
