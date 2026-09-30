@@ -1,7 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { YouTubeResolver, resolveYtDlpPath } from '../src/resolvers/YouTubeResolver.js';
-import { AudioSourceError } from '../src/utils/errors.js';
+import { UserInputError, AudioSourceError } from '../src/utils/errors.js';
+
+/** Builds a fake youtubei.js-like client for tests, so no real network/YouTube access is needed. */
+function fakeClient({
+  info = () => ({
+    playability_status: { status: 'OK' },
+    basic_info: { title: 'A video', duration: 42 },
+    chooseFormat: () => ({ decipher: async () => 'https://media.example/audio' })
+  }),
+  search = async () => ({ videos: [] })
+} = {}) {
+  return {
+    session: { player: { id: 'fake-player' } },
+    getBasicInfo: async (videoId) => info(videoId),
+    search
+  };
+}
 
 test('resolveYtDlpPath prefers YOUTUBE_DL_PATH over PATH discovery', () => {
   assert.equal(
@@ -28,42 +44,189 @@ test('resolveYtDlpPath returns null when no supported executable is available', 
   assert.equal(resolveYtDlpPath(undefined, { pathValue: '/empty', access: () => false }), null);
 });
 
-test('resolveVideoUrl invokes yt-dlp and returns its audio metadata', async () => {
-  let invocation;
+test('resolveVideoUrl resolves audio metadata entirely via the built-in (youtubei.js) client', async () => {
+  let requestedVideoId;
   const resolver = new YouTubeResolver({
-    binaryPath: '/configured/yt-dlp',
-    timeout: 5000,
-    runner: async (...args) => {
-      invocation = args;
-      return {
-        title: 'A video',
-        duration: 42,
-        url: 'https://media.example/audio',
-        acodec: 'opus'
-      };
-    }
+    createClient: async () => fakeClient({
+      info: (videoId) => {
+        requestedVideoId = videoId;
+        return {
+          playability_status: { status: 'OK' },
+          basic_info: { title: 'A video', duration: 42 },
+          chooseFormat: () => ({ decipher: async (player) => {
+            assert.deepEqual(player, { id: 'fake-player' });
+            return 'https://media.example/audio';
+          } })
+        };
+      }
+    })
   });
 
   const result = await resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
 
+  assert.equal(requestedVideoId, 'abcdefghijk');
   assert.deepEqual(result, {
     url: 'https://media.example/audio',
     title: 'A video',
     duration: 42,
     source: 'youtube'
   });
-  assert.deepEqual(invocation, [
+});
+
+test('resolveVideoId rejects malformed video IDs without contacting any client', async () => {
+  const resolver = new YouTubeResolver({
+    createClient: async () => assert.fail('client should not be created for invalid input')
+  });
+
+  await assert.rejects(resolver.resolveVideoId('not-an-id'), UserInputError);
+});
+
+test('resolveVideoUrl surfaces unavailable/private videos as a user input error', async () => {
+  const resolver = new YouTubeResolver({
+    createClient: async () => fakeClient({
+      info: () => ({
+        playability_status: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm your age' },
+        basic_info: {},
+        chooseFormat: () => { throw new Error('should not be reached'); }
+      })
+    })
+  });
+
+  await assert.rejects(
+    resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk'),
+    (error) => {
+      assert.ok(error instanceof UserInputError);
+      assert.match(error.message, /unavailable/i);
+      return true;
+    }
+  );
+});
+
+test('resolveVideoUrl reports a clear error when no audio format is available', async () => {
+  const resolver = new YouTubeResolver({
+    createClient: async () => fakeClient({
+      info: () => ({
+        playability_status: { status: 'OK' },
+        basic_info: { title: 'A video' },
+        chooseFormat: () => null
+      })
+    })
+  });
+
+  await assert.rejects(
+    resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk'),
+    (error) => {
+      assert.ok(error instanceof AudioSourceError);
+      assert.match(error.message, /Could not extract a playable audio stream/);
+      return true;
+    }
+  );
+});
+
+test('search resolves the first video result via the built-in client', async () => {
+  let searchQuery;
+  const resolver = new YouTubeResolver({
+    createClient: async () => fakeClient({
+      search: async (query) => {
+        searchQuery = query;
+        return { videos: [{ video_id: 'abcdefghijk' }] };
+      },
+      info: (videoId) => ({
+        playability_status: { status: 'OK' },
+        basic_info: { title: 'Some song', duration: 200 },
+        chooseFormat: () => ({ decipher: async () => `https://media.example/${videoId}` })
+      })
+    })
+  });
+
+  const result = await resolver.search('some song');
+
+  assert.equal(searchQuery, 'some song');
+  assert.deepEqual(result, {
+    url: 'https://media.example/abcdefghijk',
+    title: 'Some song',
+    duration: 200,
+    source: 'youtube'
+  });
+});
+
+test('search rejects short or missing queries without contacting any client', async () => {
+  const resolver = new YouTubeResolver({
+    createClient: async () => assert.fail('client should not be created for invalid input')
+  });
+
+  await assert.rejects(resolver.search(''), UserInputError);
+  await assert.rejects(resolver.search('a'), UserInputError);
+  await assert.rejects(resolver.search('x'.repeat(201)), UserInputError);
+});
+
+test('search reports no results as a user input error', async () => {
+  const resolver = new YouTubeResolver({
+    createClient: async () => fakeClient({ search: async () => ({ videos: [] }) })
+  });
+
+  await assert.rejects(
+    resolver.search('an extremely obscure query'),
+    (error) => {
+      assert.ok(error instanceof UserInputError);
+      assert.match(error.message, /No YouTube results found/);
+      return true;
+    }
+  );
+});
+
+test('client initialization failures surface as an actionable AudioSourceError when no yt-dlp fallback is configured', async () => {
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '',
+    createClient: async () => { throw new Error('network unavailable'); }
+  });
+
+  await assert.rejects(
+    resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk'),
+    (error) => {
+      assert.ok(error instanceof AudioSourceError);
+      assert.match(error.message, /Failed to initialize the YouTube client/);
+      return true;
+    }
+  );
+});
+
+test('falls back to an explicitly configured yt-dlp binary only after built-in resolution fails', async () => {
+  let ytDlpInvocation;
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  const result = await resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+
+  assert.deepEqual(result, {
+    url: 'https://media.example/fallback',
+    title: 'Fallback video',
+    duration: 10,
+    source: 'youtube'
+  });
+  assert.deepEqual(ytDlpInvocation, [
     '/configured/yt-dlp',
     ['--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist', 'https://youtube.com/watch?v=abcdefghijk'],
-    { timeout: 5000 }
+    { timeout: 30_000 }
   ]);
 });
 
-test('search keeps yt-dlp search output and resolves the first result', async () => {
+test('search falls back to yt-dlp only after built-in search fails', async () => {
   const invocations = [];
   const resolver = new YouTubeResolver({
-    binaryPath: '/configured/yt-dlp',
-    runner: async (binary, args) => {
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    createClient: async () => fakeClient({
+      search: async () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (binary, args) => {
       invocations.push(args);
       if (args.at(-1) === 'ytsearch1:some song') {
         return { entries: [{ id: 'abcdefghijk' }] };
@@ -81,50 +244,23 @@ test('search keeps yt-dlp search output and resolves the first result', async ()
   ]);
 });
 
-test('YOUTUBE_DL_PATH is used by default and yt-dlp failures retain actionable details', async () => {
-  const previousPath = process.env.YOUTUBE_DL_PATH;
-  process.env.YOUTUBE_DL_PATH = '/configured/yt-dlp';
-
-  try {
-    const resolver = new YouTubeResolver({
-      runner: async (binaryPath) => {
-        assert.equal(binaryPath, '/configured/yt-dlp');
-        throw Object.assign(new Error('Command failed'), { stderr: 'ERROR: Sign in to confirm you’re not a bot' });
-      }
-    });
-
-    await assert.rejects(
-      resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk'),
-      (error) => {
-        assert.ok(error instanceof AudioSourceError);
-        assert.match(error.message, /Sign in to confirm you’re not a bot/);
-        return true;
-      }
-    );
-  } finally {
-    if (previousPath === undefined) delete process.env.YOUTUBE_DL_PATH;
-    else process.env.YOUTUBE_DL_PATH = previousPath;
-  }
-});
-
-test('resolution reports how to configure the binary when none is installed', async () => {
-  const previousPath = process.env.PATH;
-  const previousBinaryPath = process.env.YOUTUBE_DL_PATH;
-  process.env.PATH = '';
-  delete process.env.YOUTUBE_DL_PATH;
+test('does not fall back to yt-dlp when the built-in client reports a user input error', async () => {
+  let ytDlpCalled = false;
   const resolver = new YouTubeResolver({
-    binaryPath: '',
-    runner: async () => assert.fail('runner should not be called')
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    createClient: async () => fakeClient({
+      info: () => ({
+        playability_status: { status: 'ERROR', reason: 'Video unavailable' },
+        basic_info: {},
+        chooseFormat: () => null
+      })
+    }),
+    ytDlpRunner: async () => { ytDlpCalled = true; }
   });
-  try {
-    await assert.rejects(
-      resolver.getInfo('https://youtube.com/watch?v=abcdefghijk'),
-      /Install yt-dlp or set YOUTUBE_DL_PATH/
-    );
-  } finally {
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
-    if (previousBinaryPath === undefined) delete process.env.YOUTUBE_DL_PATH;
-    else process.env.YOUTUBE_DL_PATH = previousBinaryPath;
-  }
+
+  await assert.rejects(
+    resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk'),
+    UserInputError
+  );
+  assert.equal(ytDlpCalled, false);
 });

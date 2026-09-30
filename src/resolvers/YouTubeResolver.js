@@ -1,12 +1,27 @@
 import { execFile } from 'node:child_process';
 import { constants, accessSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
+import { extractVideoId, isValidVideoId } from './urlUtils.js';
 import { UserInputError, AudioSourceError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 const MAX_ERROR_DETAILS_LENGTH = 1200;
+const UNAVAILABLE_PATTERN = /private|unavailable|removed|not available|geo.?restricted|region|sign in to confirm|age.?restrict|login required/i;
 
+/**
+ * Lazily creates the default Innertube (youtubei.js) client used to resolve YouTube
+ * audio streams without any external executable. youtubei.js speaks YouTube's
+ * internal "InnerTube" API directly from Node.js, so no yt-dlp/youtube-dl/Python
+ * binary needs to be installed on the host (e.g. WispByte, which only allows
+ * additional Node.js packages).
+ */
+async function createInnertubeClient() {
+  const { Innertube } = await import('youtubei.js');
+  return Innertube.create({ generate_session_locally: true });
+}
+
+/** Resolve an optional yt-dlp/youtube-dl executable, used only as a fallback. */
 export function resolveYtDlpPath(
   binaryPath = process.env.YOUTUBE_DL_PATH,
   { pathValue = process.env.PATH, access = canExecute } = {}
@@ -59,23 +74,170 @@ function errorDetails(error) {
   return details.slice(0, MAX_ERROR_DETAILS_LENGTH);
 }
 
+/**
+ * Resolves YouTube URLs and search queries to playable audio stream URLs.
+ *
+ * Primary resolution is done entirely from Node.js using youtubei.js (no external
+ * executable required). An optional, explicitly-configured yt-dlp/youtube-dl binary
+ * is used only as a fallback when the built-in resolution fails for a reason other
+ * than invalid user input - it is never required for the resolver to function.
+ */
 export class YouTubeResolver {
-  constructor({ timeout = 30_000, binaryPath = process.env.YOUTUBE_DL_PATH, runner = runYtDlp } = {}) {
-    this.timeout = timeout;
-    this.binaryPath = binaryPath || null;
-    this.runner = runner;
+  constructor({
+    createClient = createInnertubeClient,
+    ytDlpBinaryPath = process.env.YOUTUBE_DL_PATH,
+    ytDlpRunner = runYtDlp,
+    ytDlpTimeout = 30_000
+  } = {}) {
+    this.createClient = createClient;
+    this.ytDlpBinaryPath = ytDlpBinaryPath || null;
+    this.ytDlpRunner = ytDlpRunner;
+    this.ytDlpTimeout = ytDlpTimeout;
+    this.clientPromise = null;
+  }
+
+  async getClient() {
+    if (!this.clientPromise) {
+      this.clientPromise = Promise.resolve(this.createClient()).catch((error) => {
+        this.clientPromise = null;
+        throw error;
+      });
+    }
+    return this.clientPromise;
   }
 
   async resolveVideoId(videoId) {
-    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    if (!isValidVideoId(videoId)) {
       throw new UserInputError('Invalid YouTube video ID.');
     }
-    return this.resolveVideoUrl(`https://www.youtube.com/watch?v=${videoId}`);
+    return this.resolve(videoId, `https://www.youtube.com/watch?v=${videoId}`);
   }
 
   async resolveVideoUrl(url) {
+    const videoId = extractVideoId(url);
+    if (!videoId) {
+      throw new UserInputError('Invalid YouTube URL format.');
+    }
+    return this.resolve(videoId, url);
+  }
+
+  async resolve(videoId, url) {
     try {
-      const info = await this.getInfo(url);
+      return await this.resolveViaInnertube(videoId);
+    } catch (error) {
+      if (error instanceof UserInputError) throw error;
+
+      const ytDlpBinary = resolveYtDlpPath(this.ytDlpBinaryPath);
+      if (!ytDlpBinary) throw error;
+
+      logger.warn('Built-in YouTube resolution failed, falling back to yt-dlp', { message: error.message });
+      return this.resolveViaYtDlp(url, ytDlpBinary);
+    }
+  }
+
+  async resolveViaInnertube(videoId) {
+    const client = await this.getInitializedClient();
+
+    let info;
+    try {
+      info = await client.getBasicInfo(videoId);
+    } catch (error) {
+      const message = error?.message || String(error);
+      logger.error('YouTube video resolution failed', { message });
+      if (UNAVAILABLE_PATTERN.test(message)) {
+        throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
+      }
+      throw new AudioSourceError(`Failed to resolve YouTube video: ${message}`);
+    }
+
+    const status = info.playability_status?.status;
+    if (status && status !== 'OK') {
+      throw new UserInputError(`This YouTube video is unavailable: ${info.playability_status?.reason || status}`);
+    }
+
+    let format = null;
+    try {
+      format = info.chooseFormat({ type: 'audio', quality: 'best' });
+    } catch {
+      format = null;
+    }
+    if (!format) {
+      throw new AudioSourceError('Could not extract a playable audio stream from this YouTube video.');
+    }
+
+    let audioUrl;
+    try {
+      audioUrl = await format.decipher(client.session?.player);
+    } catch (error) {
+      throw new AudioSourceError(`Failed to decode the YouTube audio stream URL: ${error.message || error}`);
+    }
+    if (!audioUrl) {
+      throw new AudioSourceError('Could not extract a playable audio stream from this YouTube video.');
+    }
+
+    return {
+      url: audioUrl,
+      title: info.basic_info?.title || 'YouTube Video',
+      duration: info.basic_info?.duration ?? null,
+      source: 'youtube'
+    };
+  }
+
+  async getInitializedClient() {
+    try {
+      return await this.getClient();
+    } catch (error) {
+      throw new AudioSourceError(`Failed to initialize the YouTube client: ${error?.message || error}`);
+    }
+  }
+
+  async search(query) {
+    const normalizedQuery = query?.trim();
+    if (!normalizedQuery || normalizedQuery.length < 2) {
+      throw new UserInputError('Please provide a search query with at least 2 characters.');
+    }
+    if (normalizedQuery.length > 200) {
+      throw new UserInputError('Search query is too long (maximum 200 characters).');
+    }
+
+    try {
+      return await this.searchViaInnertube(normalizedQuery);
+    } catch (error) {
+      if (error instanceof UserInputError) throw error;
+
+      const ytDlpBinary = resolveYtDlpPath(this.ytDlpBinaryPath);
+      if (!ytDlpBinary) throw error;
+
+      logger.warn('Built-in YouTube search failed, falling back to yt-dlp', { message: error.message });
+      return this.searchViaYtDlp(normalizedQuery, ytDlpBinary);
+    }
+  }
+
+  async searchViaInnertube(query) {
+    const client = await this.getInitializedClient();
+
+    let results;
+    try {
+      results = await client.search(query, { type: 'video' });
+    } catch (error) {
+      const message = error?.message || String(error);
+      logger.error('YouTube search failed', { query, message });
+      throw new AudioSourceError(`Failed to search YouTube for "${query}": ${message}`);
+    }
+
+    const firstVideo = results?.videos?.find((video) => video?.video_id || video?.id);
+    if (!firstVideo) {
+      throw new UserInputError(`No YouTube results found for: "${query}"`);
+    }
+
+    return this.resolveViaInnertube(firstVideo.video_id || firstVideo.id);
+  }
+
+  // --- Optional yt-dlp fallback (not required; only used when an executable is configured) ---
+
+  async resolveViaYtDlp(url, binaryPath) {
+    try {
+      const info = await this.getYtDlpInfo(url, binaryPath);
       const audioUrl = info.requested_downloads?.find((item) => item.url)?.url
         || (info.acodec && info.acodec !== 'none' ? info.url : null)
         || info.formats?.find((format) => format.acodec && format.acodec !== 'none' && format.url)?.url;
@@ -94,52 +256,37 @@ export class YouTubeResolver {
       if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
 
       const details = errorDetails(error);
-      logger.error('YouTube video resolution failed', { message: details });
-      if (/private|unavailable|removed|not available|geo.?restricted/i.test(details)) {
+      logger.error('yt-dlp fallback resolution failed', { message: details });
+      if (UNAVAILABLE_PATTERN.test(details)) {
         throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
-      }
-      if (error.code === 'ENOENT') {
-        throw new AudioSourceError('yt-dlp executable was not found on PATH. Install yt-dlp or set YOUTUBE_DL_PATH to its executable.');
       }
       throw new AudioSourceError(`Failed to resolve YouTube video: ${details}`);
     }
   }
 
-  async search(query) {
-    const normalizedQuery = query?.trim();
-    if (!normalizedQuery || normalizedQuery.length < 2) {
-      throw new UserInputError('Please provide a search query with at least 2 characters.');
-    }
-    if (normalizedQuery.length > 200) {
-      throw new UserInputError('Search query is too long (maximum 200 characters).');
-    }
-
+  async searchViaYtDlp(query, binaryPath) {
     try {
-      const results = await this.getInfo(`${YOUTUBE_SEARCH_PREFIX}${normalizedQuery}`, { noPlaylist: false });
+      const results = await this.getYtDlpInfo(`${YOUTUBE_SEARCH_PREFIX}${query}`, binaryPath, { noPlaylist: false });
       const firstResult = results.entries?.find((entry) => entry && (entry.id || entry.url || entry.webpage_url));
-      if (!firstResult) throw new UserInputError(`No YouTube results found for: "${normalizedQuery}"`);
+      if (!firstResult) throw new UserInputError(`No YouTube results found for: "${query}"`);
 
       const videoUrl = firstResult.webpage_url
         || (firstResult.id ? `https://www.youtube.com/watch?v=${firstResult.id}` : firstResult.url);
-      if (!videoUrl) throw new UserInputError(`No playable YouTube results found for: "${normalizedQuery}"`);
-      return await this.resolveVideoUrl(videoUrl);
+      if (!videoUrl) throw new UserInputError(`No playable YouTube results found for: "${query}"`);
+      return await this.resolveViaYtDlp(videoUrl, binaryPath);
     } catch (error) {
       if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
+
       const details = errorDetails(error);
-      logger.error('YouTube search failed', { query: normalizedQuery, message: details });
-      throw new AudioSourceError(`Failed to search YouTube for "${normalizedQuery}": ${details}`);
+      logger.error('yt-dlp search fallback failed', { query, message: details });
+      throw new AudioSourceError(`Failed to search YouTube for "${query}": ${details}`);
     }
   }
 
-  async getInfo(url, extraFlags = {}) {
-    const binaryPath = resolveYtDlpPath(this.binaryPath);
-    if (!binaryPath) {
-      throw new AudioSourceError('yt-dlp executable was not found on PATH. Install yt-dlp or set YOUTUBE_DL_PATH to its executable.');
-    }
-
+  async getYtDlpInfo(url, binaryPath, extraFlags = {}) {
     const args = ['--dump-single-json', '--no-warnings', '--format', 'bestaudio/best'];
     if (extraFlags.noPlaylist !== false) args.push('--no-playlist');
     args.push(url);
-    return this.runner(binaryPath, args, { timeout: this.timeout });
+    return this.ytDlpRunner(binaryPath, args, { timeout: this.ytDlpTimeout });
   }
 }
