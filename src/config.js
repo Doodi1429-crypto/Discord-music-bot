@@ -24,6 +24,8 @@ export function loadConfig() {
     guildId: process.env.GUILD_ID || null,
     ffmpegPath: process.env.FFMPEG_PATH || null,
     logLevel: process.env.LOG_LEVEL || 'info',
+    // Both checks are required: Number(undefined) is NaN (rejected by isFinite), but
+    // Number('') is 0, which is finite - the `> 0` check is what rejects an empty/blank value.
     loginTimeoutMs: Number.isFinite(loginTimeoutMs) && loginTimeoutMs > 0 ? loginTimeoutMs : DEFAULT_LOGIN_TIMEOUT_MS
   };
 }

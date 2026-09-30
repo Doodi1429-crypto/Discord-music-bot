@@ -52,7 +52,6 @@ logger.info('Connecting to Discord gateway...');
 loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
   .catch(async error => {
     logger.error('Login failed', { message: error.message });
-    process.exitCode = 1;
     await client.destroy().catch(() => {});
     // A hung/stuck gateway connection can leave open sockets that keep the event loop alive
     // indefinitely even after destroy(); exit explicitly so the host's process manager restarts
