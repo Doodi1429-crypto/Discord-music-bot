@@ -50,12 +50,14 @@ process.on('SIGINT', () => { manager.destroyAll(); client.destroy(); process.exi
 process.on('SIGTERM', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
 logger.info('Connecting to Discord gateway...');
 loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
-  .catch(async error => {
+  .catch(error => {
     logger.error('Login failed', { message: error.message });
-    await client.destroy().catch(() => {});
-    // A hung/stuck gateway connection can leave open sockets that keep the event loop alive
-    // indefinitely even after destroy(); exit explicitly so the host's process manager restarts
-    // it. setImmediate gives the logger's synchronous console writes a turn of the event loop
-    // to flush before the process terminates.
+    // Don't await destroy(): on the exact failure this guards against (a stuck/blackholed
+    // connection), destroy() could hang for the same reason login did, which would defeat the
+    // point of exiting promptly. Let it run best-effort in the background.
+    client.destroy().catch(() => {});
+    // setImmediate gives the logger's synchronous console write and the destroy() call above a
+    // turn of the event loop before the process terminates; exit explicitly since a hung
+    // connection's open sockets could otherwise keep the event loop alive indefinitely.
     setImmediate(() => process.exit(1));
   });
