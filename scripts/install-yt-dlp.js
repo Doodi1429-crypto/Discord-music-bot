@@ -18,6 +18,7 @@ import { constants as fsConstants, createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import { YT_DLP_BIN_DIR, YT_DLP_DEFAULT_PATH } from '../src/resolvers/ytDlpPaths.js';
 
 const execFileAsync = promisify(execFile);
@@ -162,7 +163,7 @@ export async function installYtDlp({
 // default build command) fail clearly rather than silently deploy without yt-dlp.
 const FAILING_OUTCOMES = new Set(['download-failed', 'verify-failed']);
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   installYtDlp()
     .then((result) => {
       if (FAILING_OUTCOMES.has(result.outcome)) process.exitCode = 1;
