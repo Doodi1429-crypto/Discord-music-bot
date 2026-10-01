@@ -12,11 +12,13 @@ import {
   resolveYtDlpExtractorArgs,
   sanitizeDetails,
   errorDetails,
+  runYtDlp,
   DEFAULT_YT_DLP_JS_RUNTIMES,
   DEFAULT_YT_DLP_PLAYER_CLIENT
 } from '../src/resolvers/YouTubeResolver.js';
 import { YT_DLP_DEFAULT_PATH } from '../src/resolvers/ytDlpPaths.js';
 import { UserInputError, AudioSourceError } from '../src/utils/errors.js';
+import { logger } from '../src/utils/logger.js';
 
 /** Builds a fake youtubei.js-like client for tests, so no real network/YouTube access is needed. */
 function fakeClient({
@@ -488,6 +490,145 @@ test('sanitizeDetails masks sensitive tokens and po_token arguments', () => {
   assert.equal(sanitizeDetails('plain error without secrets'), 'plain error without secrets');
 });
 
+test('sanitizeDetails redacts token, cookie, credential, and authorization formats', () => {
+  const bearerSecret = ['BEARER', 'SECRET'].join('_');
+  const urlPassword = ['PASS', 'SECRET'].join('_');
+  const raw = [
+    'youtube:po_token=PO_SECRET access_token=ACCESS_SECRET api_key=KEY_SECRET',
+    "--cookies '/private/cookies.txt' --cookies-from-browser firefox --password CLI_SECRET",
+    'Cookie: SID=COOKIE_SECRET; auth=COOKIE_AUTH',
+    'Authorization: Bearer ' + bearerSecret,
+    'https://user:' + urlPassword + '@example.test/audio?token=URL_SECRET',
+    '.youtube.com TRUE / TRUE 123 SID NETSCAPE_COOKIE_SECRET'
+  ].join('\n');
+  const sanitized = sanitizeDetails(raw);
+
+  for (const secret of [
+    'PO_SECRET', 'ACCESS_SECRET', 'KEY_SECRET', '/private/cookies.txt', 'firefox',
+    'CLI_SECRET', 'COOKIE_SECRET', 'COOKIE_AUTH', bearerSecret, `user:${urlPassword}`,
+    'URL_SECRET', 'NETSCAPE_COOKIE_SECRET'
+  ]) {
+    assert.equal(sanitized.includes(secret), false, `expected ${secret} to be redacted`);
+  }
+  assert.equal(errorDetails({ message: raw }).includes('COOKIE_SECRET'), false);
+});
+
+test('YOUTUBE_DL_DEBUG gates verbose invocation and diagnostic metadata', async () => {
+  const previousDebug = process.env.YOUTUBE_DL_DEBUG;
+  const previousPoToken = process.env.YOUTUBE_DL_PO_TOKEN;
+  const secret = 'PO_TOKEN_MUST_NOT_BE_REPORTED';
+  const invocations = [];
+  const createResolver = () => new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPoToken: secret,
+    ytDlpCookiesPath: '/private/cookies.txt',
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('Sign in to confirm you are not a bot'); }
+    }),
+    ytDlpRunner: async (binary, args, options) => {
+      invocations.push({ binary, args, options });
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/audio', acodec: 'opus' };
+    }
+  });
+
+  try {
+    delete process.env.YOUTUBE_DL_DEBUG;
+    process.env.YOUTUBE_DL_PO_TOKEN = secret;
+    await createResolver().resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+    assert.equal(invocations[0].args.includes('--verbose'), false);
+    assert.deepEqual(invocations[0].options, { timeout: 30_000 });
+
+    process.env.YOUTUBE_DL_DEBUG = 'true';
+    await createResolver().resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+    const debugInvocation = invocations[1];
+    assert.equal(debugInvocation.args.includes('--verbose'), true);
+    assert.equal(debugInvocation.args.includes('--no-warnings'), false);
+    assert.equal(debugInvocation.options.debug, true);
+    assert.equal(debugInvocation.options.diagnostics.cookiesConfigured, true);
+    assert.equal(debugInvocation.options.diagnostics.extractorConfiguration.includes(secret), false);
+    assert.equal(JSON.stringify(debugInvocation.options.diagnostics).includes('/private/cookies.txt'), false);
+  } finally {
+    if (previousDebug === undefined) delete process.env.YOUTUBE_DL_DEBUG;
+    else process.env.YOUTUBE_DL_DEBUG = previousDebug;
+    if (previousPoToken === undefined) delete process.env.YOUTUBE_DL_PO_TOKEN;
+    else process.env.YOUTUBE_DL_PO_TOKEN = previousPoToken;
+  }
+});
+
+test('runYtDlp reports sanitized runtime diagnostics and final exit code only in debug mode', async () => {
+  const originalInfo = logger.info;
+  const calls = [];
+  const reports = [];
+  const bearerSecret = ['BEARER', 'SECRET'].join('_');
+  const fakeExecFile = (binary, args, options, callback) => {
+    calls.push(args);
+    if (args[0] === '--version') {
+      callback(null, '2026.09.29\n', '');
+      return;
+    }
+    const error = Object.assign(new Error('yt-dlp command failed'), { code: 1 });
+    callback(error, '', [
+      '[debug] JS runtimes: node',
+      '[debug] yt-dlp-ejs available',
+      '[debug] PO Token provider available',
+      '[debug] youtube player_client=web,default',
+      '[debug] PO Token is required',
+      "--cookies '/private/cookies.txt' youtube:po_token=PO_SECRET",
+      'Cookie: SID=COOKIE_SECRET',
+      'Authorization: Bearer ' + bearerSecret
+    ].join('\n'));
+  };
+
+  try {
+    logger.info = (message, details) => reports.push({ message, details });
+    await assert.rejects(runYtDlp('/configured/yt-dlp', ['--dump-single-json'], {
+      timeout: 100,
+      execFileImpl: fakeExecFile
+    }));
+    assert.deepEqual(calls, [['--dump-single-json']]);
+    assert.equal(reports.length, 0);
+
+    calls.length = 0;
+    await assert.rejects(runYtDlp('/configured/yt-dlp', ['--verbose', '--dump-single-json'], {
+      timeout: 100,
+      debug: true,
+      execFileImpl: fakeExecFile,
+      sensitiveValues: ['PO_SECRET'],
+      diagnostics: {
+        configuredJsRuntimes: 'node',
+        configuredPlayerClient: null,
+        challengeProviderConfigured: false,
+        poTokenConfigured: true,
+        extractorConfiguration: 'youtube:po_token=[REDACTED]',
+        configFileConfigured: false,
+        cookiesConfigured: false
+      }
+    }));
+
+    assert.deepEqual(calls, [['--version'], ['--verbose', '--dump-single-json']]);
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0].message, 'yt-dlp diagnostic report');
+    assert.equal(reports[0].details.ytDlpVersion, '2026.09.29');
+    assert.equal(reports[0].details.nodeVersion, process.version);
+    assert.deepEqual(reports[0].details.detectedJsRuntimeOutput, ['[debug] JS runtimes: node']);
+    assert.equal(reports[0].details.ejsAvailability, 'available');
+    assert.equal(reports[0].details.challengeProviderAvailability, 'available');
+    assert.deepEqual(reports[0].details.reportedPlayerClients, ['[debug] youtube player_client=web,default']);
+    assert.equal(reports[0].details.playerClientPolicy, 'yt-dlp default');
+    assert.equal(reports[0].details.poTokenRequired, true);
+    assert.equal(reports[0].details.exitCode, 1);
+
+    const report = JSON.stringify(reports[0]);
+    for (const secret of ['PO_SECRET', '/private/cookies.txt', 'COOKIE_SECRET', 'BEARER_SECRET']) {
+      assert.equal(report.includes(secret), false, `expected ${secret} to be absent from diagnostic report`);
+    }
+    assert.match(reports[0].details.errorOutput, /Cookie: \[REDACTED\]/);
+    assert.match(reports[0].details.errorOutput, /Authorization: \[REDACTED\]/);
+  } finally {
+    logger.info = originalInfo;
+  }
+});
+
 test('yt-dlp fallback resolution passes custom PO-token and provider as discrete argv entries', async () => {
   let ytDlpInvocation;
   const resolver = new YouTubeResolver({
@@ -815,4 +956,3 @@ test('yt-dlp fallback resolution passes custom js-runtimes or omits when explici
     '--js-runtimes', 'node,quickjs'
   ]);
 });
-
