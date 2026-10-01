@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { YouTubeResolver, resolveYtDlpPath } from '../src/resolvers/YouTubeResolver.js';
+import {
+  YouTubeResolver,
+  resolveYtDlpPath,
+  resolveYtDlpConfigPath,
+  resolveYtDlpCookiesPath
+} from '../src/resolvers/YouTubeResolver.js';
 import { UserInputError, AudioSourceError } from '../src/utils/errors.js';
 
 /** Builds a fake youtubei.js-like client for tests, so no real network/YouTube access is needed. */
@@ -241,6 +246,78 @@ test('search falls back to yt-dlp only after built-in search fails', async () =>
   assert.deepEqual(invocations, [
     ['--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', 'ytsearch1:some song'],
     ['--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist', 'https://www.youtube.com/watch?v=abcdefghijk']
+  ]);
+});
+
+test('resolveYtDlpConfigPath and resolveYtDlpCookiesPath trim values and default to null when unset', () => {
+  assert.equal(resolveYtDlpConfigPath(''), null);
+  assert.equal(resolveYtDlpConfigPath('  /etc/yt-dlp/config.conf  '), '/etc/yt-dlp/config.conf');
+  assert.equal(resolveYtDlpCookiesPath(undefined), null);
+  assert.equal(resolveYtDlpCookiesPath(' /secrets/cookies.txt '), '/secrets/cookies.txt');
+});
+
+test('yt-dlp fallback resolution passes configured config/cookies paths as discrete argv entries', async () => {
+  let ytDlpInvocation;
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpConfigPath: '/etc/yt-dlp/config.conf',
+    ytDlpCookiesPath: '/secrets/cookies.txt',
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  await resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+
+  assert.deepEqual(ytDlpInvocation, [
+    '/configured/yt-dlp',
+    [
+      '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
+      '--config-location', '/etc/yt-dlp/config.conf',
+      '--cookies', '/secrets/cookies.txt',
+      'https://youtube.com/watch?v=abcdefghijk'
+    ],
+    { timeout: 30_000 }
+  ]);
+});
+
+test('yt-dlp search fallback passes configured config/cookies paths as discrete argv entries', async () => {
+  const invocations = [];
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpConfigPath: '/etc/yt-dlp/config.conf',
+    ytDlpCookiesPath: '/secrets/cookies.txt',
+    createClient: async () => fakeClient({
+      search: async () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (binary, args) => {
+      invocations.push(args);
+      if (args.includes('ytsearch1:some song')) {
+        return { entries: [{ id: 'abcdefghijk' }] };
+      }
+      return { title: 'Some song', url: 'https://media.example/audio', acodec: 'opus' };
+    }
+  });
+
+  await resolver.search('some song');
+
+  assert.deepEqual(invocations, [
+    [
+      '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best',
+      '--config-location', '/etc/yt-dlp/config.conf',
+      '--cookies', '/secrets/cookies.txt',
+      'ytsearch1:some song'
+    ],
+    [
+      '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
+      '--config-location', '/etc/yt-dlp/config.conf',
+      '--cookies', '/secrets/cookies.txt',
+      'https://www.youtube.com/watch?v=abcdefghijk'
+    ]
   ]);
 });
 

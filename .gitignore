@@ -10,3 +10,11 @@ temp/
 *.part
 .DS_Store
 npm-debug.log*
+
+# yt-dlp cookies/config secrets that operators may mount locally for the optional
+# fallback (see YOUTUBE_DL_CONFIG_PATH / YOUTUBE_DL_COOKIES_PATH in .env.example).
+# Never commit real cookies or yt-dlp config containing credentials.
+cookies.txt
+*.cookies.txt
+yt-dlp.conf
+yt-dlp.config
