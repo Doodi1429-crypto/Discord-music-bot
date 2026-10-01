@@ -107,6 +107,7 @@ export async function installBgutilPotProvider({
     ], { cwd: serverPath });
     await runCommand('npm', [
       'ci',
+      '--include=dev',
       '--no-audit',
       '--no-fund'
     ], { cwd: serverPath });

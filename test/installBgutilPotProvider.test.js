@@ -67,6 +67,7 @@ test('installer pins the upstream version and patched Axios before installing de
     assert.equal(commands[3].command, process.execPath);
     assert.ok(commands[3].args[0].endsWith('/server/node_modules/typescript/bin/tsc'));
     assert.deepEqual([commands[4].command, commands[4].args[0]], ['npm', 'prune']);
+    assert.ok(commands[2].args.includes('--include=dev'));
     assert.deepEqual(commands[1].args.slice(1), [
       '--package-lock-only',
       '--ignore-scripts',
