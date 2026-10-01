@@ -64,8 +64,8 @@ npm start
 ## AI assistant
 
 AI chat is disabled by default. Set `AI_ENABLED=true` and provide `AI_API_KEY` to enable
-the OpenAI-compatible provider. Users can explicitly trigger it with `!ai message` (or
-mention the bot); `AI_TRIGGER` changes the prefix. `!ai reset` clears only that user's
+the OpenAI-compatible provider. Users can explicitly trigger it with `/ai message` (or
+mention the bot); `AI_TRIGGER` changes the prefix. `/ai reset` clears only that user's
 temporary conversation in the current guild/channel. Context is bounded by
 `AI_MAX_CONTEXT_MESSAGES` and is cleared when the process restarts.
 

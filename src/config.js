@@ -56,7 +56,7 @@ export function loadConfig() {
       maxResponseLength: Math.min(2000, Math.floor(positiveNumber(process.env.AI_MAX_RESPONSE_LENGTH, 2000))),
       systemPrompt: process.env.AI_SYSTEM_PROMPT?.trim() || DEFAULT_AI_SYSTEM_PROMPT,
       timeoutMs: Math.floor(positiveNumber(process.env.AI_TIMEOUT_MS, 15000)),
-      trigger: process.env.AI_TRIGGER?.trim() || '!ai'
+      trigger: process.env.AI_TRIGGER?.trim() || '/ai'
     }
   };
 }

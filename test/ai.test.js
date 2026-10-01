@@ -59,17 +59,17 @@ test('AI triggers only on mention or configured prefix and splits safely', () =>
 test('Discord handler ignores empty AI responses and reports sanitized failures', async () => {
   const replies = [];
   const message = {
-    content: '!ai hello', guildId: 'g', channelId: 'c', author: { id: 'u' },
+    content: '/ai hello', guildId: 'g', channelId: 'c', author: { id: 'u' },
     channel: { sendTyping: async () => {} }, reply: async value => replies.push(value)
   };
   await handleAIMessage(message, {
     service: { generateResponse: async () => '' },
-    config: { trigger: '!ai', maxResponseLength: 2 }, botId: '123'
+    config: { trigger: '/ai', maxResponseLength: 2 }, botId: '123'
   });
   assert.deepEqual(replies, []);
   await handleAIMessage(message, {
     service: { generateResponse: async () => { throw new Error('secret provider detail'); } },
-    config: { trigger: '!ai', maxResponseLength: 2 }, botId: '123', logger: { warn: () => {} }
+    config: { trigger: '/ai', maxResponseLength: 2 }, botId: '123', logger: { warn: () => {} }
   });
   assert.equal(replies.length, 1);
   assert.doesNotMatch(replies[0], /secret provider/);

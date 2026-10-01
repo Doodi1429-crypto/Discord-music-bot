@@ -51,11 +51,17 @@ test('loadConfig honors a valid LOGIN_TIMEOUT_MS override', () => {
 });
 
 test('loadConfig defaults AI to disabled and applies overrides', () => {
-  withEnv({ AI_MODEL: 'custom', AI_TRIGGER: '?ai' }, () => {
+  withEnv({ AI_MODEL: 'custom' }, () => {
     const config = loadConfig();
     assert.equal(config.ai.enabled, false);
     assert.equal(config.ai.model, 'custom');
-    assert.equal(config.ai.trigger, '?ai');
+    assert.equal(config.ai.trigger, '/ai');
+  });
+});
+
+test('loadConfig honors a custom AI trigger', () => {
+  withEnv({ AI_TRIGGER: '?ai' }, () => {
+    assert.equal(loadConfig().ai.trigger, '?ai');
   });
 });
 
