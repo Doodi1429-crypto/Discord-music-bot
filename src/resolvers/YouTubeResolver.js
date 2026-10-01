@@ -8,6 +8,12 @@ import { logger } from '../utils/logger.js';
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 const MAX_ERROR_DETAILS_LENGTH = 1200;
 const UNAVAILABLE_PATTERN = /private|unavailable|removed|not available|geo.?restricted|region|sign in to confirm|age.?restrict|login required/i;
+// Matches Innertube's bot-detection challenge (e.g. "Sign in to confirm you're not a
+// bot"), as distinct from genuine user-input restrictions (private/age-gated/removed
+// videos). This is an upstream YouTube/IP-reputation challenge rather than a problem
+// with the requested video, so it should allow the optional yt-dlp fallback to run
+// instead of being rejected outright as user input.
+const BOT_CHECK_PATTERN = /not a bot|automated (queries|requests)/i;
 
 /**
  * Lazily creates the default Innertube (youtubei.js) client used to resolve YouTube
@@ -167,6 +173,9 @@ export class YouTubeResolver {
     } catch (error) {
       const message = error?.message || String(error);
       logger.error('YouTube video resolution failed', { message });
+      if (BOT_CHECK_PATTERN.test(message)) {
+        throw new AudioSourceError(`YouTube requires additional verification for this video: ${message}`);
+      }
       if (UNAVAILABLE_PATTERN.test(message)) {
         throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
       }
@@ -175,7 +184,13 @@ export class YouTubeResolver {
 
     const status = info.playability_status?.status;
     if (status && status !== 'OK') {
-      throw new UserInputError(`This YouTube video is unavailable: ${info.playability_status?.reason || status}`);
+      const reason = info.playability_status?.reason || status;
+      if (BOT_CHECK_PATTERN.test(reason)) {
+        // Not a user-input problem (the video itself is fine) - let resolve() fall
+        // back to yt-dlp (if configured) instead of rejecting the request outright.
+        throw new AudioSourceError(`YouTube requires additional verification for this video: ${reason}`);
+      }
+      throw new UserInputError(`This YouTube video is unavailable: ${reason}`);
     }
 
     let format = null;
