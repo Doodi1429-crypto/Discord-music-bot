@@ -18,3 +18,8 @@ cookies.txt
 *.cookies.txt
 yt-dlp.conf
 yt-dlp.config
+
+# yt-dlp binary auto-downloaded by scripts/install-yt-dlp.js during `npm install`
+# (see YOUTUBE_DL_PATH / YOUTUBE_DL_SKIP_INSTALL in .env.example). Never committed;
+# re-downloaded automatically on every install.
+/bin/

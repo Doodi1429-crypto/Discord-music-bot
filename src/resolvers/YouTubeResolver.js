@@ -4,6 +4,7 @@ import { delimiter, join } from 'node:path';
 import { extractVideoId, isValidVideoId } from './urlUtils.js';
 import { UserInputError, AudioSourceError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
+import { YT_DLP_DEFAULT_PATH } from './ytDlpPaths.js';
 
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 const MAX_ERROR_DETAILS_LENGTH = 1200;
@@ -31,12 +32,21 @@ async function createInnertubeClient() {
   return Innertube.create({ generate_session_locally: true });
 }
 
-/** Resolve an optional yt-dlp/youtube-dl executable, used only as a fallback. */
+/**
+ * Resolve an optional yt-dlp/youtube-dl executable, used only as a fallback.
+ *
+ * Resolution order: an explicit YOUTUBE_DL_PATH override always wins; otherwise the
+ * default local path that scripts/install-yt-dlp.js downloads to during `npm install`
+ * is checked (making an auto-installed binary discoverable with zero configuration);
+ * finally PATH is scanned, covering operator-managed installs (e.g. apt/Docker).
+ */
 export function resolveYtDlpPath(
   binaryPath = process.env.YOUTUBE_DL_PATH,
-  { pathValue = process.env.PATH, access = canExecute } = {}
+  { pathValue = process.env.PATH, access = canExecute, defaultInstallPath = YT_DLP_DEFAULT_PATH } = {}
 ) {
   if (binaryPath?.trim()) return binaryPath.trim();
+
+  if (defaultInstallPath && access(defaultInstallPath)) return defaultInstallPath;
 
   for (const directory of (pathValue || '').split(delimiter).filter(Boolean)) {
     for (const executable of ['yt-dlp', 'youtube-dl']) {
@@ -118,7 +128,8 @@ export class YouTubeResolver {
     ytDlpRunner = runYtDlp,
     ytDlpTimeout = 30_000,
     ytDlpConfigPath = resolveYtDlpConfigPath(),
-    ytDlpCookiesPath = resolveYtDlpCookiesPath()
+    ytDlpCookiesPath = resolveYtDlpCookiesPath(),
+    resolveYtDlpBinary = resolveYtDlpPath
   } = {}) {
     this.createClient = createClient;
     this.ytDlpBinaryPath = ytDlpBinaryPath || null;
@@ -126,6 +137,7 @@ export class YouTubeResolver {
     this.ytDlpTimeout = ytDlpTimeout;
     this.ytDlpConfigPath = ytDlpConfigPath || null;
     this.ytDlpCookiesPath = ytDlpCookiesPath || null;
+    this.resolveYtDlpBinary = resolveYtDlpBinary;
     this.clientPromise = null;
   }
 
@@ -160,7 +172,7 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError) throw error;
 
-      const ytDlpBinary = resolveYtDlpPath(this.ytDlpBinaryPath);
+      const ytDlpBinary = this.resolveYtDlpBinary(this.ytDlpBinaryPath);
       if (!ytDlpBinary) throw error;
 
       logger.warn('Built-in YouTube resolution failed, falling back to yt-dlp', { message: error.message });
@@ -247,7 +259,7 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError) throw error;
 
-      const ytDlpBinary = resolveYtDlpPath(this.ytDlpBinaryPath);
+      const ytDlpBinary = this.resolveYtDlpBinary(this.ytDlpBinaryPath);
       if (!ytDlpBinary) throw error;
 
       logger.warn('Built-in YouTube search failed, falling back to yt-dlp', { message: error.message });
