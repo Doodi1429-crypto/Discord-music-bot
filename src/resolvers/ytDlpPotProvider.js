@@ -66,6 +66,30 @@ function safeProcessError(error) {
   return '';
 }
 
+const MAX_CAPTURED_STDERR_LENGTH = 2_000;
+
+/**
+ * Captures the provider child process's own stderr so startup failures (crash on an
+ * unhandled exception, a bind error such as EADDRINUSE, etc.) are surfaced instead of
+ * silently producing a generic timeout with no diagnostic signal. Output is capped and
+ * stripped of control characters before being embedded in an error message.
+ */
+function createStderrCapture(child) {
+  let buffer = '';
+  child.stderr?.on('data', (chunk) => {
+    buffer += chunk.toString('utf8');
+    if (buffer.length > MAX_CAPTURED_STDERR_LENGTH) {
+      buffer = buffer.slice(buffer.length - MAX_CAPTURED_STDERR_LENGTH);
+    }
+  });
+  return () => buffer.replace(/[^\t\n\r\x20-\x7E]/g, '').trim();
+}
+
+function withCapturedStderr(message, getStderrTail) {
+  const tail = getStderrTail();
+  return tail ? `${message} Provider stderr: ${tail}` : message;
+}
+
 async function stopChild(child) {
   if (!child || child.exitCode !== null || child.killed) return;
   await new Promise((resolve) => {
@@ -101,13 +125,17 @@ export async function startYtDlpPotProvider({
       '--port',
       String(config.port)
     ], {
-      stdio: 'ignore',
+      // stdin/stdout are ignored (the provider's startup banner isn't actionable), but
+      // stderr is piped so a crash or bind failure can be reported instead of only ever
+      // producing an opaque "did not become ready" timeout with no underlying cause.
+      stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true
     });
   } catch (error) {
     throw new Error(`The local YouTube PO-token provider could not start${safeProcessError(error)}.`);
   }
 
+  const getStderrTail = createStderrCapture(child);
   let spawnError;
   child.once('error', (error) => { spawnError = error; });
   const readyUrl = `${config.baseUrl}/ping`;
@@ -116,10 +144,16 @@ export async function startYtDlpPotProvider({
   try {
     while (Date.now() < deadline) {
       if (spawnError) {
-        throw new Error(`The local YouTube PO-token provider could not start${safeProcessError(spawnError)}.`);
+        throw new Error(withCapturedStderr(
+          `The local YouTube PO-token provider could not start${safeProcessError(spawnError)}.`,
+          getStderrTail
+        ));
       }
       if (child.exitCode !== null) {
-        throw new Error('The local YouTube PO-token provider exited before becoming ready.');
+        throw new Error(withCapturedStderr(
+          'The local YouTube PO-token provider exited before becoming ready.',
+          getStderrTail
+        ));
       }
       try {
         const response = await fetchImpl(readyUrl, { signal: AbortSignal.timeout(1_000) });
@@ -138,7 +172,10 @@ export async function startYtDlpPotProvider({
       }
       await delay(pollIntervalMs);
     }
-    throw new Error(`The local YouTube PO-token provider did not become ready within ${timeoutMs}ms.`);
+    throw new Error(withCapturedStderr(
+      `The local YouTube PO-token provider did not become ready within ${timeoutMs}ms.`,
+      getStderrTail
+    ));
   } catch (error) {
     await stopChild(child);
     throw error;

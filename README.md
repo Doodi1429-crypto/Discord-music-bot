@@ -44,7 +44,10 @@ Supported provider settings:
   `none` to omit explicit client selection or set another yt-dlp client.
 
 If provider startup fails, the bot still connects and logs a sanitized diagnostic; a
-later yt-dlp extraction reports a sanitized provider error. Check the Render build logs
+later yt-dlp extraction reports a sanitized provider error. The diagnostic includes a
+capped, control-character-stripped tail of the provider child process's own stderr
+(e.g. a bind failure or a crash during startup) so the underlying cause is visible
+instead of only a generic "did not become ready" timeout. Check the Render build logs
 for dependency-download/install failures and service logs for provider readiness.
 
 PO tokens can help with YouTube bot checks, but YouTube may still reject requests due to
