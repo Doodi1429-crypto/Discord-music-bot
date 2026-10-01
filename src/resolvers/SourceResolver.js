@@ -1,20 +1,30 @@
 import { isValidUrl, isYouTubeUrl, extractVideoId } from './urlUtils.js';
 import { YouTubeResolver } from './YouTubeResolver.js';
-import { logger } from '../utils/logger.js';
+import { GenericResolver } from './GenericResolver.js';
 import { UserInputError } from '../utils/errors.js';
 
 export class SourceResolver {
-  constructor() {
-    this.youtubeResolver = new YouTubeResolver();
+  constructor({ youtubeResolver, genericResolver } = {}) {
+    this.youtubeResolver = youtubeResolver || new YouTubeResolver();
+    this.genericResolver = genericResolver || new GenericResolver();
   }
 
   /**
    * Resolve a user input (URL or search query) to a playable source.
    * Supports:
-   * - Direct audio/video URLs (http(s)://...)
-   * - YouTube video URLs (youtube.com/watch?v=...)
-   * - YouTube short URLs (youtu.be/...)
-   * - YouTube search queries (text input without http://)
+   * - YouTube video URLs (youtube.com/watch?v=...) and short URLs (youtu.be/...),
+   *   resolved via youtubei.js with an optional yt-dlp (PO-token/bgutil-aware) fallback.
+   * - Other HTTP(S) URLs from any site yt-dlp supports (e.g. SoundCloud, Bandcamp,
+   *   Vimeo), resolved via yt-dlp's generic extractor support. YouTube-specific
+   *   PO-token/bgutil/player-client configuration never applies to these. A clean
+   *   user-facing error is returned when extraction does not yield playable audio
+   *   (e.g. the link requires auth, is a non-media webpage, or isn't supported).
+   * - Text search queries, which only search YouTube today; there is no search
+   *   mechanism wired up for other platforms, so non-URL input never reaches
+   *   GenericResolver.
+   *
+   * A failure resolving one URL/platform never affects resolution of another: YouTube
+   * and non-YouTube URLs are handled by entirely separate resolver instances.
    *
    * Returns: { url, title, duration, source } where source is the resolver used
    */
@@ -39,16 +49,13 @@ export class SourceResolver {
         return await this.youtubeResolver.resolveVideoId(videoId);
       }
 
-      // Direct media URL (HTTP/HTTPS)
-      return {
-        url: input,
-        title: new URL(input).hostname || 'Direct Media',
-        duration: null,
-        source: 'direct'
-      };
+      // Non-YouTube HTTP(S) URL - verify it actually yields playable audio via
+      // yt-dlp's generic extractor support rather than assuming any webpage URL
+      // is directly playable.
+      return await this.genericResolver.resolve(input);
     }
 
-    // Not a URL - treat as search query
+    // Not a URL - treat as a YouTube search query (the only search mechanism wired up).
     return await this.youtubeResolver.search(input);
   }
 }
