@@ -6,13 +6,28 @@ import { parseAITrigger, splitResponse, handleAIMessage } from '../src/ai/discor
 
 const providerConfig = { apiKey: 'test-key', model: 'test-model', apiUrl: 'https://example.test', timeoutMs: 20 };
 
-test('AI provider returns a valid response without exposing credentials', async () => {
+test('Gemini OpenAI-compatible provider sends the expected request and reads its response', async () => {
   let request;
-  const provider = new AIProvider({ ...providerConfig, fetchImpl: async (_url, options) => {
-    request = options;
-    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'hello' } }] }) };
-  } });
-  assert.equal(await provider.generate([{ role: 'user', content: 'hi' }]), 'hello');
+  let requestUrl;
+  const messages = [
+    { role: 'system', content: 'system instructions' },
+    { role: 'user', content: 'hi' }
+  ];
+  const provider = new AIProvider({
+    ...providerConfig,
+    provider: 'gemini',
+    apiUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    model: 'gemini-3.6-flash',
+    fetchImpl: async (url, options) => {
+      requestUrl = url;
+      request = options;
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'hello' } }] }) };
+    }
+  });
+  assert.equal(await provider.generate(messages), 'hello');
+  assert.equal(requestUrl, 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+  assert.equal(request.headers.authorization, 'Bearer ' + providerConfig.apiKey);
+  assert.deepEqual(JSON.parse(request.body), { model: 'gemini-3.6-flash', messages });
 });
 
 test('AI provider handles missing credentials, rate limits, malformed responses and failures', async () => {
@@ -51,6 +66,8 @@ test('conversation context trims and isolates keys', () => {
 test('AI triggers only on mention or configured prefix and splits safely', () => {
   assert.equal(parseAITrigger('<@123> hello', { trigger: '!ask', botId: '123' }), 'hello');
   assert.equal(parseAITrigger('!ask hello', { trigger: '!ask', botId: '123' }), 'hello');
+  assert.equal(parseAITrigger('!ai hello', { trigger: '!ask', botId: '123' }), 'hello');
+  assert.equal(parseAITrigger('/ai hello', { trigger: '!ask', botId: '123' }), 'hello');
   assert.equal(parseAITrigger('hello', { trigger: '!ask', botId: '123' }), null);
   assert.deepEqual(splitResponse('abcdef', 2), ['ab', 'cd', 'ef']);
   assert.deepEqual(splitResponse('', 2), []);

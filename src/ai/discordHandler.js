@@ -5,7 +5,11 @@ export const AI_USER_ERROR = 'صار خطأ وأنا أحاول أفكر 😭 ج
 export function parseAITrigger(content, { trigger, botId }) {
   const mention = new RegExp(`^<@!?${botId}>\\s*`, 'u');
   if (mention.test(content)) return content.replace(mention, '').trim();
-  if (content.startsWith(trigger)) return content.slice(trigger.length).trim();
+  const matchedTrigger = [trigger, '!ai', '/ai']
+    .filter((candidate, index, candidates) => candidates.indexOf(candidate) === index)
+    .sort((left, right) => right.length - left.length)
+    .find(candidate => content.startsWith(candidate));
+  if (matchedTrigger) return content.slice(matchedTrigger.length).trim();
   return null;
 }
 
