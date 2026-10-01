@@ -7,12 +7,16 @@ import { logger } from '../utils/logger.js';
 
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 const MAX_ERROR_DETAILS_LENGTH = 1200;
-const UNAVAILABLE_PATTERN = /private|unavailable|removed|not available|geo.?restricted|region|sign in to confirm|age.?restrict|login required/i;
+// Deliberately does NOT match "sign in to confirm" generically: that phrase is also
+// used by YouTube's bot-detection challenge (see BOT_CHECK_PATTERN below), which must
+// be distinguished from these genuine user-input restrictions (private/age-gated/
+// removed/region-restricted videos) and is always checked first at both call sites.
+const UNAVAILABLE_PATTERN = /private|unavailable|removed|not available|geo.?restricted|region|age.?restrict|login required/i;
 // Matches Innertube's bot-detection challenge (e.g. "Sign in to confirm you're not a
-// bot"), as distinct from genuine user-input restrictions (private/age-gated/removed
-// videos). This is an upstream YouTube/IP-reputation challenge rather than a problem
-// with the requested video, so it should allow the optional yt-dlp fallback to run
-// instead of being rejected outright as user input.
+// bot"), as distinct from genuine user-input restrictions matched by UNAVAILABLE_PATTERN
+// above. This is an upstream YouTube/IP-reputation challenge rather than a problem with
+// the requested video, so it should allow the optional yt-dlp fallback to run instead of
+// being rejected outright as user input.
 const BOT_CHECK_PATTERN = /not a bot|automated (queries|requests)/i;
 
 /**
