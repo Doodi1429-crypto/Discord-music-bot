@@ -12,6 +12,7 @@ import {
   resolveYtDlpExtractorArgs,
   sanitizeDetails,
   errorDetails,
+  fullErrorDetails,
   runYtDlp,
   DEFAULT_YT_DLP_JS_RUNTIMES,
   DEFAULT_YT_DLP_PLAYER_CLIENT
@@ -523,6 +524,73 @@ test('sanitizeDetails redacts token, cookie, credential, and authorization forma
   assert.equal(sanitizeDetails('Generated POT: GENERATED_PO_TOKEN_VALUE'), 'Generated POT: [REDACTED]');
 });
 
+test('errorDetails reduces verbose multi-line yt-dlp diagnostics to a short final-error summary, while fullErrorDetails preserves everything', () => {
+  const secret = 'SUPER_SECRET_PO_TOKEN_12345';
+  const verboseStderr = [
+    '[debug] Command-line config: [\'--verbose\', \'--dump-single-json\']',
+    '[debug] yt-dlp version 2024.01.01',
+    `[debug] Loaded plugin bgutil-ytdlp-pot-provider from http://127.0.0.1:4416`,
+    '[debug] [youtube] Extracting URL: https://youtube.com/watch?v=abcdefghijk',
+    `[debug] po_token=${secret}`,
+    'ERROR: [youtube] abcdefghijk: Sign in to confirm you\u2019re not a bot'
+  ].join('\n');
+  const error = { stderr: verboseStderr };
+
+  const summary = errorDetails(error, [secret]);
+  assert.equal(summary.includes(secret), false, 'secret must not appear in the short summary');
+  assert.equal(summary, 'ERROR: [youtube] abcdefghijk: Sign in to confirm you\u2019re not a bot');
+  assert.ok(summary.length < 200, 'the Discord-facing summary should be short, not the full verbose transcript');
+
+  const full = fullErrorDetails(error, [secret]);
+  assert.equal(full.includes(secret), false, 'secret must not appear in full diagnostics either');
+  assert.match(full, /bgutil-ytdlp-pot-provider/);
+  assert.match(full, /http:\/\/127\.0\.0\.1:4416/);
+  assert.match(full, /Extracting URL/);
+  assert.match(full, /Sign in to confirm you\u2019re not a bot$/);
+});
+
+test('errorDetails finds a tag-prefixed ERROR line (e.g. "[download] ERROR: ...") instead of falling back to the last unrelated line', () => {
+  const stderr = [
+    '[debug] yt-dlp version 2024.01.01',
+    '[download] ERROR: unable to download video data: HTTP Error 403: Forbidden',
+    '[debug] cleaning up temporary files'
+  ].join('\n');
+
+  const summary = errorDetails({ stderr });
+  assert.equal(summary, 'ERROR: unable to download video data: HTTP Error 403: Forbidden');
+});
+
+test('errorDetails ignores benign lines that merely mention the word "error" without yt-dlp\'s ERROR: marker', () => {
+  const stderr = [
+    '[debug] retrying after error: connection reset, continuing',
+    'ERROR: [youtube] abcdefghijk: Video unavailable'
+  ].join('\n');
+
+  const summary = errorDetails({ stderr });
+  assert.equal(summary, 'ERROR: [youtube] abcdefghijk: Video unavailable');
+});
+
+test('errorDetails does not match "ERROR:" appearing mid-line after an unrelated bracket', () => {
+  const stderr = [
+    '[debug] something ] look ERROR: nope, this is not a real yt-dlp error line',
+    'network timeout while connecting to video host'
+  ].join('\n');
+
+  const summary = errorDetails({ stderr });
+  assert.equal(summary, 'network timeout while connecting to video host');
+});
+
+test('errorDetails picks the last of multiple ERROR: lines, treating it as the final/fatal error', () => {
+  const stderr = [
+    'ERROR: [youtube] abcdefghijk: Unable to download webpage (retrying)',
+    '[debug] retrying download',
+    'ERROR: [youtube] abcdefghijk: HTTP Error 403: Forbidden'
+  ].join('\n');
+
+  const summary = errorDetails({ stderr });
+  assert.equal(summary, 'ERROR: [youtube] abcdefghijk: HTTP Error 403: Forbidden');
+});
+
 test('YOUTUBE_DL_DEBUG gates verbose invocation and diagnostic metadata', async () => {
   const previousDebug = process.env.YOUTUBE_DL_DEBUG;
   const previousPoToken = process.env.YOUTUBE_DL_PO_TOKEN;
@@ -886,6 +954,55 @@ test('yt-dlp fallback masks sensitive po_token in error messages and diagnostics
       return true;
     }
   );
+});
+
+test('yt-dlp fallback keeps the Discord-facing error short while logging full verbose diagnostics to Render logs', async () => {
+  const secretToken = 'ANOTHER_SECRET_TOKEN_98765';
+  const verboseStderr = [
+    '[debug] Command-line config: [\'--verbose\', \'--dump-single-json\']',
+    '[debug] Loaded plugin bgutil-ytdlp-pot-provider from http://127.0.0.1:4416',
+    `[debug] po_token=${secretToken}`,
+    'ERROR: [youtube] abcdefghijk: HTTP Error 403: Forbidden'
+  ].join('\n');
+
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPoToken: secretToken,
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async () => {
+      const err = new Error('yt-dlp execution failed');
+      err.stderr = verboseStderr;
+      throw err;
+    }
+  });
+
+  const originalError = logger.error;
+  const loggedCalls = [];
+  logger.error = (message, meta) => loggedCalls.push({ message, meta });
+  try {
+    await assert.rejects(
+      resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk'),
+      (error) => {
+        assert.ok(error instanceof AudioSourceError);
+        assert.equal(error.message.includes(secretToken), false);
+        assert.equal(error.message.includes('[debug]'), false, 'full verbose preamble must not reach Discord');
+        assert.match(error.message, /HTTP Error 403: Forbidden$/);
+        assert.ok(error.message.length < 200, 'Discord-facing message should be a short summary');
+        return true;
+      }
+    );
+  } finally {
+    logger.error = originalError;
+  }
+
+  const fallbackLog = loggedCalls.find((call) => call.message === 'yt-dlp fallback resolution failed');
+  assert.ok(fallbackLog, 'expected the full diagnostics to be logged');
+  assert.equal(fallbackLog.meta.message.includes(secretToken), false);
+  assert.match(fallbackLog.meta.message, /bgutil-ytdlp-pot-provider/);
+  assert.match(fallbackLog.meta.message, /http:\/\/127\.0\.0\.1:4416/);
+  assert.match(fallbackLog.meta.message, /HTTP Error 403: Forbidden/);
 });
 
 test('yt-dlp fallback maps unavailable/private errors to UserInputError and preserves others as AudioSourceError', async () => {

@@ -10,7 +10,12 @@ import {
 } from './ytDlpPotProvider.js';
 
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
-const MAX_ERROR_DETAILS_LENGTH = 1200;
+// Full (sanitized) diagnostics written to Render logs (stdout/stderr) are capped
+// generously; they are never sent to Discord, so there is no truncation risk there.
+const MAX_LOG_ERROR_LENGTH = 20000;
+// Short sanitized summary surfaced to Discord: a single final error line, not the
+// full verbose yt-dlp transcript, so Discord never truncates it before the error.
+const MAX_USER_ERROR_LENGTH = 300;
 // Deliberately does NOT match "sign in to confirm" generically: that phrase is also
 // used by YouTube's bot-detection challenge (see BOT_CHECK_PATTERN below), which must
 // be distinguished from these genuine user-input restrictions (private/age-gated/
@@ -225,7 +230,7 @@ function reportYtDlpDiagnostics({ version, stderr, error, exitCode, diagnostics,
     ? null
     : diagnostics.cookiesConfigured
       ? '[omitted because a cookie file is configured]'
-      : sanitizeDetails(stderr.trim() || error.message || String(error), sensitiveValues).slice(0, MAX_ERROR_DETAILS_LENGTH);
+      : sanitizeDetails(stderr.trim() || error.message || String(error), sensitiveValues).slice(0, MAX_LOG_ERROR_LENGTH);
 
   logger.info('yt-dlp diagnostic report', {
     ytDlpVersion: version,
@@ -320,13 +325,58 @@ export function sanitizeDetails(details, sensitiveValues = []) {
     .replace(/((?:po[-_]?token|(?:access|refresh|auth|id)?[-_]?token|api[-_]?key|client[-_]?secret|client[-_]?id|secret|password|passwd|username|credential|authorization|auth|key|cookie|cookies)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&;,]+)/gi, '$1[REDACTED]');
 }
 
+const NO_DIAGNOSTIC_OUTPUT_MESSAGE =
+  'yt-dlp failed without diagnostic output. Verify the yt-dlp binary and network access.';
+
+/**
+ * Reduces (potentially long, multi-line verbose) sanitized yt-dlp output down to a
+ * short, single-line summary suitable for a Discord reply: the last reported
+ * "ERROR: ..." line (yt-dlp's final/fatal error), falling back to the last
+ * non-empty line when no explicit ERROR line is present.
+ */
+function summarizeErrorForUser(sanitizedDetails) {
+  if (!sanitizedDetails) return '';
+  const lines = sanitizedDetails.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return '';
+  // yt-dlp always emits its own fatal errors with an uppercase "ERROR:" marker at
+  // the very start of the line, optionally preceded by one or more bracketed
+  // "[tag] " prefixes (e.g. "ERROR: ..." or "[download] [info] ERROR: ..."), never
+  // with other text ahead of it. Anchoring this way keeps the match from
+  // triggering on unrelated debug/warning lines that merely mention the word
+  // "error" elsewhere in their text (e.g. "retrying after error: ...").
+  const ERROR_LINE_PATTERN = /^(?:\[[^[\]]*\]\s*)*(ERROR:.*)$/;
+  const errorLines = lines
+    .map((line) => line.match(ERROR_LINE_PATTERN)?.[1])
+    .filter(Boolean);
+  // Use the *last* matching ERROR: line, since yt-dlp may log earlier retry
+  // warnings before its final/fatal error line; only trim a leading "[tag] "
+  // prefix when we matched yt-dlp's own ERROR: marker, and use the unrelated
+  // fallback line (no ERROR: found at all) as-is.
+  const summary = errorLines.length ? errorLines[errorLines.length - 1] : lines[lines.length - 1];
+  return summary.slice(0, MAX_USER_ERROR_LENGTH);
+}
+
+/**
+ * Full sanitized diagnostic details (stderr/message), intended only for Render
+ * logs (stdout/stderr) - never sent to Discord. Capped generously so real
+ * diagnostics aren't lost, as opposed to the short summary returned by errorDetails().
+ */
+export function fullErrorDetails(error, sensitiveValues = []) {
+  const details = error.stderr?.trim() || error.message || String(error);
+  if (details === 'Error') return NO_DIAGNOSTIC_OUTPUT_MESSAGE;
+  return sanitizeDetails(details, sensitiveValues).slice(0, MAX_LOG_ERROR_LENGTH);
+}
+
+/**
+ * Short, sanitized, single-line error summary suitable for user-facing surfaces
+ * like Discord. Full verbose yt-dlp diagnostics belong in Render logs instead -
+ * see fullErrorDetails().
+ */
 export function errorDetails(error, sensitiveValues = []) {
   const details = error.stderr?.trim() || error.message || String(error);
-  if (details === 'Error') {
-    return 'yt-dlp failed without diagnostic output. Verify the yt-dlp binary and network access.';
-  }
+  if (details === 'Error') return NO_DIAGNOSTIC_OUTPUT_MESSAGE;
   const sanitized = sanitizeDetails(details, sensitiveValues);
-  return sanitized.slice(0, MAX_ERROR_DETAILS_LENGTH);
+  return summarizeErrorForUser(sanitized);
 }
 
 /**
@@ -564,6 +614,12 @@ export class YouTubeResolver {
     return errorDetails(error, sensitive);
   }
 
+  getFullErrorDetails(error) {
+    const sensitive = [];
+    if (this.ytDlpPoToken) sensitive.push(this.ytDlpPoToken);
+    return fullErrorDetails(error, sensitive);
+  }
+
   async resolveViaYtDlp(url, binaryPath) {
     try {
       const info = await this.getYtDlpInfo(url, binaryPath);
@@ -584,8 +640,11 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
 
+      // Full verbose yt-dlp diagnostics go to Render logs only; Discord only ever
+      // receives the short sanitized summary built below.
+      const fullDetails = this.getFullErrorDetails(error);
+      logger.error('yt-dlp fallback resolution failed', { message: fullDetails });
       const details = this.getErrorDetails(error);
-      logger.error('yt-dlp fallback resolution failed', { message: details });
       if (UNAVAILABLE_PATTERN.test(details)) {
         throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
       }
@@ -606,8 +665,11 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
 
+      // Full verbose yt-dlp diagnostics go to Render logs only; Discord only ever
+      // receives the short sanitized summary built below.
+      const fullDetails = this.getFullErrorDetails(error);
+      logger.error('yt-dlp search fallback failed', { query, message: fullDetails });
       const details = this.getErrorDetails(error);
-      logger.error('yt-dlp search fallback failed', { query, message: details });
       throw new AudioSourceError(`Failed to search YouTube for "${query}": ${details}`);
     }
   }
