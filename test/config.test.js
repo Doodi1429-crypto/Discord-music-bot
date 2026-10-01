@@ -9,7 +9,7 @@ const REQUIRED_ENV = {
 };
 
 function withEnv(overrides, fn) {
-  const keys = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID', 'LOGIN_TIMEOUT_MS', 'AI_ENABLED', 'AI_API_KEY', 'AI_MODEL', 'AI_TRIGGER'];
+  const keys = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID', 'LOGIN_TIMEOUT_MS', 'AI_ENABLED', 'AI_API_KEY', 'AI_PROVIDER', 'AI_MODEL', 'AI_API_URL', 'AI_TRIGGER'];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     for (const key of keys) delete process.env[key];
@@ -50,18 +50,50 @@ test('loadConfig honors a valid LOGIN_TIMEOUT_MS override', () => {
   });
 });
 
-test('loadConfig defaults AI to disabled and applies overrides', () => {
+test('loadConfig defaults AI to disabled and Gemini, and applies model overrides', () => {
   withEnv({ AI_MODEL: 'custom' }, () => {
     const config = loadConfig();
     assert.equal(config.ai.enabled, false);
+    assert.equal(config.ai.provider, 'gemini');
     assert.equal(config.ai.model, 'custom');
-    assert.equal(config.ai.trigger, '/ai');
+    assert.equal(config.ai.apiUrl, 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+    assert.equal(config.ai.trigger, '!ai');
+  });
+});
+
+test('loadConfig selects Gemini defaults and honors Gemini provider overrides', () => {
+  withEnv({}, () => {
+    const config = loadConfig();
+    assert.equal(config.ai.provider, 'gemini');
+    assert.equal(config.ai.model, 'gemini-3.6-flash');
+    assert.equal(config.ai.apiUrl, 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+  });
+  withEnv({ AI_MODEL: 'gemini-custom', AI_API_URL: 'https://example.test/chat/completions' }, () => {
+    const config = loadConfig();
+    assert.equal(config.ai.model, 'gemini-custom');
+    assert.equal(config.ai.apiUrl, 'https://example.test/chat/completions');
+  });
+});
+
+test('loadConfig preserves OpenAI defaults and honors provider selection overrides', () => {
+  withEnv({ AI_PROVIDER: 'openai' }, () => {
+    const config = loadConfig();
+    assert.equal(config.ai.provider, 'openai');
+    assert.equal(config.ai.model, 'gpt-4o-mini');
+    assert.equal(config.ai.apiUrl, 'https://api.openai.com/v1/chat/completions');
+  });
+  withEnv({ AI_PROVIDER: ' OPENAI ', AI_MODEL: 'custom-openai', AI_API_URL: 'https://example.test/openai' }, () => {
+    const config = loadConfig();
+    assert.equal(config.ai.provider, 'openai');
+    assert.equal(config.ai.model, 'custom-openai');
+    assert.equal(config.ai.apiUrl, 'https://example.test/openai');
   });
 });
 
 test('loadConfig honors a custom AI trigger', () => {
   withEnv({ AI_TRIGGER: '?ai' }, () => {
     assert.equal(loadConfig().ai.trigger, '?ai');
+    assert.equal(loadConfig().ai.provider, 'gemini');
   });
 });
 

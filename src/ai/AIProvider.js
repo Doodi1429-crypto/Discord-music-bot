@@ -9,7 +9,7 @@ export class AIProviderError extends Error {
 }
 
 export class AIProvider {
-  constructor({ apiKey, model, apiUrl, timeoutMs, fetchImpl = fetch, provider = 'openai' }) {
+  constructor({ apiKey, model, apiUrl, timeoutMs, fetchImpl = fetch, provider = 'gemini' }) {
     if (!apiKey) throw new AIProviderError('missing_credentials', 'AI credentials are not configured');
     this.apiKey = apiKey;
     this.model = model;

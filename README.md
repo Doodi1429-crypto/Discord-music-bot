@@ -64,12 +64,19 @@ npm start
 ## AI assistant
 
 AI chat is disabled by default. Set `AI_ENABLED=true` and provide `AI_API_KEY` to enable
-the OpenAI-compatible provider. Users can explicitly trigger it with `/ai message` (or
-mention the bot); `AI_TRIGGER` changes the prefix. `/ai reset` clears only that user's
-temporary conversation in the current guild/channel. Context is bounded by
-`AI_MAX_CONTEXT_MESSAGES` and is cleared when the process restarts.
+the Gemini provider. It uses Google's OpenAI-compatible chat-completions endpoint
+(`https://generativelanguage.googleapis.com/v1beta/openai/`) and defaults to
+`gemini-3.6-flash`. The model is available through the Gemini API free tier according to
+Google's pricing documentation. To use OpenAI instead, set `AI_PROVIDER=openai`; its
+existing defaults remain `gpt-4o-mini` and
+`https://api.openai.com/v1/chat/completions`.
+
+Users can trigger AI with `!ai message` (the legacy `/ai message` prefix also works) or
+mention the bot; `AI_TRIGGER` changes the configured prefix. `!ai reset` or `/ai reset`
+clears only that user's temporary conversation in the current guild/channel. Context is
+bounded by `AI_MAX_CONTEXT_MESSAGES` and is cleared when the process restarts.
 
 Available AI settings are `AI_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`,
 `AI_API_URL`, `AI_MAX_CONTEXT_MESSAGES`, `AI_MAX_RESPONSE_LENGTH`, `AI_SYSTEM_PROMPT`,
-`AI_TIMEOUT_MS`, and `AI_TRIGGER`. See `.env.example`; credentials and conversations
-are not logged.
+`AI_TIMEOUT_MS`, and `AI_TRIGGER`. `AI_MODEL` and `AI_API_URL` override the defaults for
+the selected provider. See `.env.example`; credentials and conversations are not logged.

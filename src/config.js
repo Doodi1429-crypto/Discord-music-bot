@@ -35,6 +35,10 @@ export function loadConfig() {
   const loginTimeoutMs = Number(process.env.LOGIN_TIMEOUT_MS);
   const aiEnabled = booleanValue(process.env.AI_ENABLED);
   const aiApiKey = process.env.AI_API_KEY?.trim() || '';
+  const aiProvider = process.env.AI_PROVIDER?.trim().toLowerCase() || 'gemini';
+  if (!['gemini', 'openai'].includes(aiProvider)) {
+    throw new Error('AI_PROVIDER must be gemini or openai.');
+  }
   if (aiEnabled && !aiApiKey) throw new Error('AI_ENABLED is true but AI_API_KEY is missing.');
 
   return {
@@ -48,15 +52,17 @@ export function loadConfig() {
     loginTimeoutMs: Number.isFinite(loginTimeoutMs) && loginTimeoutMs > 0 ? loginTimeoutMs : DEFAULT_LOGIN_TIMEOUT_MS,
     ai: {
       enabled: aiEnabled,
-      provider: process.env.AI_PROVIDER?.trim() || 'openai',
+      provider: aiProvider,
       apiKey: aiApiKey,
-      model: process.env.AI_MODEL?.trim() || 'gpt-4o-mini',
-      apiUrl: process.env.AI_API_URL?.trim() || 'https://api.openai.com/v1/chat/completions',
+      model: process.env.AI_MODEL?.trim() || (aiProvider === 'openai' ? 'gpt-4o-mini' : 'gemini-3.6-flash'),
+      apiUrl: process.env.AI_API_URL?.trim() || (aiProvider === 'openai'
+        ? 'https://api.openai.com/v1/chat/completions'
+        : 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'),
       maxContextMessages: Math.floor(positiveNumber(process.env.AI_MAX_CONTEXT_MESSAGES, 12)),
       maxResponseLength: Math.min(2000, Math.floor(positiveNumber(process.env.AI_MAX_RESPONSE_LENGTH, 2000))),
       systemPrompt: process.env.AI_SYSTEM_PROMPT?.trim() || DEFAULT_AI_SYSTEM_PROMPT,
       timeoutMs: Math.floor(positiveNumber(process.env.AI_TIMEOUT_MS, 15000)),
-      trigger: process.env.AI_TRIGGER?.trim() || '/ai'
+      trigger: process.env.AI_TRIGGER?.trim() || '!ai'
     }
   };
 }
