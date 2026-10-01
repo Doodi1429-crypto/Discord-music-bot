@@ -47,6 +47,25 @@ function canExecute(filePath) {
   }
 }
 
+/**
+ * Resolves an optional yt-dlp config file path (e.g. `--config-location`), used to let
+ * operators supply extractor-args, a PO-token provider plugin configuration, or other
+ * yt-dlp settings without embedding them in source. Never logged; path only.
+ */
+export function resolveYtDlpConfigPath(configPath = process.env.YOUTUBE_DL_CONFIG_PATH) {
+  return configPath?.trim() || null;
+}
+
+/**
+ * Resolves an optional yt-dlp cookies file path (e.g. `--cookies`), used to let operators
+ * mount their own exported browser cookies for requests that require authentication.
+ * The file contents are never read or logged by this resolver; only the path is passed
+ * through to the yt-dlp executable.
+ */
+export function resolveYtDlpCookiesPath(cookiesPath = process.env.YOUTUBE_DL_COOKIES_PATH) {
+  return cookiesPath?.trim() || null;
+}
+
 function runYtDlp(binaryPath, args, { timeout }) {
   return new Promise((resolve, reject) => {
     execFile(binaryPath, args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, timeout, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
@@ -87,12 +106,16 @@ export class YouTubeResolver {
     createClient = createInnertubeClient,
     ytDlpBinaryPath = process.env.YOUTUBE_DL_PATH,
     ytDlpRunner = runYtDlp,
-    ytDlpTimeout = 30_000
+    ytDlpTimeout = 30_000,
+    ytDlpConfigPath = resolveYtDlpConfigPath(),
+    ytDlpCookiesPath = resolveYtDlpCookiesPath()
   } = {}) {
     this.createClient = createClient;
     this.ytDlpBinaryPath = ytDlpBinaryPath || null;
     this.ytDlpRunner = ytDlpRunner;
     this.ytDlpTimeout = ytDlpTimeout;
+    this.ytDlpConfigPath = ytDlpConfigPath || null;
+    this.ytDlpCookiesPath = ytDlpCookiesPath || null;
     this.clientPromise = null;
   }
 
@@ -286,6 +309,12 @@ export class YouTubeResolver {
   async getYtDlpInfo(url, binaryPath, extraFlags = {}) {
     const args = ['--dump-single-json', '--no-warnings', '--format', 'bestaudio/best'];
     if (extraFlags.noPlaylist !== false) args.push('--no-playlist');
+    // Optional, operator-configured auth/config, passed as discrete argv entries (never
+    // through a shell) so a config file and/or cookies file can be supplied without
+    // embedding any credentials in source. Omitted entirely when unset, preserving the
+    // default invocation used when no such configuration is provided.
+    if (this.ytDlpConfigPath) args.push('--config-location', this.ytDlpConfigPath);
+    if (this.ytDlpCookiesPath) args.push('--cookies', this.ytDlpCookiesPath);
     args.push(url);
     return this.ytDlpRunner(binaryPath, args, { timeout: this.ytDlpTimeout });
   }
