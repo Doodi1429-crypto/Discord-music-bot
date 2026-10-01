@@ -4,10 +4,21 @@ import { delimiter, join } from 'node:path';
 import { extractVideoId, isValidVideoId } from './urlUtils.js';
 import { UserInputError, AudioSourceError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
+import { YT_DLP_DEFAULT_PATH } from './ytDlpPaths.js';
 
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 const MAX_ERROR_DETAILS_LENGTH = 1200;
-const UNAVAILABLE_PATTERN = /private|unavailable|removed|not available|geo.?restricted|region|sign in to confirm|age.?restrict|login required/i;
+// Deliberately does NOT match "sign in to confirm" generically: that phrase is also
+// used by YouTube's bot-detection challenge (see BOT_CHECK_PATTERN below), which must
+// be distinguished from these genuine user-input restrictions (private/age-gated/
+// removed/region-restricted videos) and is always checked first at both call sites.
+const UNAVAILABLE_PATTERN = /private|unavailable|removed|not available|geo.?restricted|region|age.?restrict|login required/i;
+// Matches Innertube's bot-detection challenge (e.g. "Sign in to confirm you're not a
+// bot"), as distinct from genuine user-input restrictions matched by UNAVAILABLE_PATTERN
+// above. This is an upstream YouTube/IP-reputation challenge rather than a problem with
+// the requested video, so it should allow the optional yt-dlp fallback to run instead of
+// being rejected outright as user input.
+const BOT_CHECK_PATTERN = /not a bot|automated (queries|requests)/i;
 
 /**
  * Lazily creates the default Innertube (youtubei.js) client used to resolve YouTube
@@ -21,12 +32,21 @@ async function createInnertubeClient() {
   return Innertube.create({ generate_session_locally: true });
 }
 
-/** Resolve an optional yt-dlp/youtube-dl executable, used only as a fallback. */
+/**
+ * Resolve an optional yt-dlp/youtube-dl executable, used only as a fallback.
+ *
+ * Resolution order: an explicit YOUTUBE_DL_PATH override always wins; otherwise the
+ * default local path that scripts/install-yt-dlp.js downloads to during `npm install`
+ * is checked (making an auto-installed binary discoverable with zero configuration);
+ * finally PATH is scanned, covering operator-managed installs (e.g. apt/Docker).
+ */
 export function resolveYtDlpPath(
   binaryPath = process.env.YOUTUBE_DL_PATH,
-  { pathValue = process.env.PATH, access = canExecute } = {}
+  { pathValue = process.env.PATH, access = canExecute, defaultInstallPath = YT_DLP_DEFAULT_PATH } = {}
 ) {
   if (binaryPath?.trim()) return binaryPath.trim();
+
+  if (defaultInstallPath && access(defaultInstallPath)) return defaultInstallPath;
 
   for (const directory of (pathValue || '').split(delimiter).filter(Boolean)) {
     for (const executable of ['yt-dlp', 'youtube-dl']) {
@@ -108,7 +128,8 @@ export class YouTubeResolver {
     ytDlpRunner = runYtDlp,
     ytDlpTimeout = 30_000,
     ytDlpConfigPath = resolveYtDlpConfigPath(),
-    ytDlpCookiesPath = resolveYtDlpCookiesPath()
+    ytDlpCookiesPath = resolveYtDlpCookiesPath(),
+    resolveYtDlpBinary = resolveYtDlpPath
   } = {}) {
     this.createClient = createClient;
     this.ytDlpBinaryPath = ytDlpBinaryPath || null;
@@ -116,6 +137,7 @@ export class YouTubeResolver {
     this.ytDlpTimeout = ytDlpTimeout;
     this.ytDlpConfigPath = ytDlpConfigPath || null;
     this.ytDlpCookiesPath = ytDlpCookiesPath || null;
+    this.resolveYtDlpBinary = resolveYtDlpBinary;
     this.clientPromise = null;
   }
 
@@ -150,7 +172,7 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError) throw error;
 
-      const ytDlpBinary = resolveYtDlpPath(this.ytDlpBinaryPath);
+      const ytDlpBinary = this.resolveYtDlpBinary(this.ytDlpBinaryPath);
       if (!ytDlpBinary) throw error;
 
       logger.warn('Built-in YouTube resolution failed, falling back to yt-dlp', { message: error.message });
@@ -167,6 +189,9 @@ export class YouTubeResolver {
     } catch (error) {
       const message = error?.message || String(error);
       logger.error('YouTube video resolution failed', { message });
+      if (BOT_CHECK_PATTERN.test(message)) {
+        throw new AudioSourceError(`YouTube requires additional verification for this video: ${message}`);
+      }
       if (UNAVAILABLE_PATTERN.test(message)) {
         throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
       }
@@ -175,7 +200,13 @@ export class YouTubeResolver {
 
     const status = info.playability_status?.status;
     if (status && status !== 'OK') {
-      throw new UserInputError(`This YouTube video is unavailable: ${info.playability_status?.reason || status}`);
+      const reason = info.playability_status?.reason || status;
+      if (BOT_CHECK_PATTERN.test(reason)) {
+        // Not a user-input problem (the video itself is fine) - let resolve() fall
+        // back to yt-dlp (if configured) instead of rejecting the request outright.
+        throw new AudioSourceError(`YouTube requires additional verification for this video: ${reason}`);
+      }
+      throw new UserInputError(`This YouTube video is unavailable: ${reason}`);
     }
 
     let format = null;
@@ -228,7 +259,7 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError) throw error;
 
-      const ytDlpBinary = resolveYtDlpPath(this.ytDlpBinaryPath);
+      const ytDlpBinary = this.resolveYtDlpBinary(this.ytDlpBinaryPath);
       if (!ytDlpBinary) throw error;
 
       logger.warn('Built-in YouTube search failed, falling back to yt-dlp', { message: error.message });

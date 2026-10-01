@@ -6,6 +6,7 @@ import {
   resolveYtDlpConfigPath,
   resolveYtDlpCookiesPath
 } from '../src/resolvers/YouTubeResolver.js';
+import { YT_DLP_DEFAULT_PATH } from '../src/resolvers/ytDlpPaths.js';
 import { UserInputError, AudioSourceError } from '../src/utils/errors.js';
 
 /** Builds a fake youtubei.js-like client for tests, so no real network/YouTube access is needed. */
@@ -31,10 +32,25 @@ test('resolveYtDlpPath prefers YOUTUBE_DL_PATH over PATH discovery', () => {
   );
 });
 
-test('resolveYtDlpPath discovers yt-dlp before youtube-dl from PATH', () => {
+test('resolveYtDlpPath prefers the default auto-installed path over PATH discovery', () => {
+  const checked = [];
+  const path = resolveYtDlpPath(undefined, {
+    pathValue: '/system/bin',
+    access: (candidate) => {
+      checked.push(candidate);
+      return candidate === YT_DLP_DEFAULT_PATH;
+    }
+  });
+
+  assert.equal(path, YT_DLP_DEFAULT_PATH);
+  assert.deepEqual(checked, [YT_DLP_DEFAULT_PATH]);
+});
+
+test('resolveYtDlpPath discovers yt-dlp before youtube-dl from PATH when no default-install binary is present', () => {
   const checked = [];
   const path = resolveYtDlpPath(undefined, {
     pathValue: '/first/bin:/second/bin',
+    defaultInstallPath: null,
     access: (candidate) => {
       checked.push(candidate);
       return candidate === '/second/bin/yt-dlp';
@@ -46,7 +62,10 @@ test('resolveYtDlpPath discovers yt-dlp before youtube-dl from PATH', () => {
 });
 
 test('resolveYtDlpPath returns null when no supported executable is available', () => {
-  assert.equal(resolveYtDlpPath(undefined, { pathValue: '/empty', access: () => false }), null);
+  assert.equal(
+    resolveYtDlpPath(undefined, { pathValue: '/empty', defaultInstallPath: null, access: () => false }),
+    null
+  );
 });
 
 test('resolveVideoUrl resolves audio metadata entirely via the built-in (youtubei.js) client', async () => {
@@ -109,6 +128,7 @@ test('resolveVideoUrl surfaces unavailable/private videos as a user input error'
 
 test('resolveVideoUrl reports a clear error when no audio format is available', async () => {
   const resolver = new YouTubeResolver({
+    resolveYtDlpBinary: () => null,
     createClient: async () => fakeClient({
       info: () => ({
         playability_status: { status: 'OK' },
@@ -183,6 +203,7 @@ test('search reports no results as a user input error', async () => {
 test('client initialization failures surface as an actionable AudioSourceError when no yt-dlp fallback is configured', async () => {
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '',
+    resolveYtDlpBinary: () => null,
     createClient: async () => { throw new Error('network unavailable'); }
   });
 
@@ -319,6 +340,57 @@ test('yt-dlp search fallback passes configured config/cookies paths as discrete 
       'https://www.youtube.com/watch?v=abcdefghijk'
     ]
   ]);
+});
+
+test('falls back to yt-dlp when the built-in client reports a bot-check/sign-in challenge', async () => {
+  let ytDlpInvocation;
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    createClient: async () => fakeClient({
+      info: () => ({
+        playability_status: { status: 'LOGIN_REQUIRED', reason: "Sign in to confirm you're not a bot" },
+        basic_info: {},
+        chooseFormat: () => { throw new Error('should not be reached'); }
+      })
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  const result = await resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+
+  assert.deepEqual(result, {
+    url: 'https://media.example/fallback',
+    title: 'Fallback video',
+    duration: 10,
+    source: 'youtube'
+  });
+  assert.ok(ytDlpInvocation, 'expected yt-dlp to be invoked as a fallback');
+});
+
+test('surfaces a bot-check/sign-in challenge as an actionable error when no yt-dlp fallback is configured', async () => {
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '',
+    resolveYtDlpBinary: () => null,
+    createClient: async () => fakeClient({
+      info: () => ({
+        playability_status: { status: 'LOGIN_REQUIRED', reason: "Sign in to confirm you're not a bot" },
+        basic_info: {},
+        chooseFormat: () => { throw new Error('should not be reached'); }
+      })
+    })
+  });
+
+  await assert.rejects(
+    resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk'),
+    (error) => {
+      assert.ok(error instanceof AudioSourceError);
+      assert.match(error.message, /not a bot/i);
+      return true;
+    }
+  );
 });
 
 test('does not fall back to yt-dlp when the built-in client reports a user input error', async () => {

@@ -11,7 +11,8 @@
     "start": "node src/index.js",
     "deploy-commands": "node src/deploy-commands.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "postinstall": "node scripts/install-yt-dlp.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
