@@ -87,6 +87,32 @@ export function resolveYtDlpCookiesPath(cookiesPath = process.env.YOUTUBE_DL_COO
 }
 
 /**
+ * Default JavaScript runtime passed to yt-dlp via `--js-runtimes`.
+ * Modern yt-dlp requires an external JavaScript runtime to solve YouTube's
+ * JavaScript player challenges (e.g. signature deciphering and n-parameter challenges).
+ * yt-dlp enables only 'deno' by default; in Node.js container environments like Render,
+ * Deno is not installed, causing yt-dlp to find 0 JS runtimes and fail with bot/signature
+ * errors. Explicitly enabling 'node' ensures yt-dlp solves challenges using the
+ * environment's existing Node.js runtime without requiring account credentials or cookies.
+ */
+export const DEFAULT_YT_DLP_JS_RUNTIMES = 'node';
+
+/**
+ * Resolves operator-configurable JavaScript runtime(s) for yt-dlp.
+ * Defaults to 'node'. Setting to empty string or 'none' disables passing `--js-runtimes`.
+ */
+export function resolveYtDlpJsRuntimes(jsRuntimes = process.env.YOUTUBE_DL_JS_RUNTIMES) {
+  if (jsRuntimes === undefined) return DEFAULT_YT_DLP_JS_RUNTIMES;
+  if (Array.isArray(jsRuntimes)) {
+    const items = jsRuntimes.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
+    return items.length ? items.join(',') : null;
+  }
+  const trimmed = jsRuntimes?.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'none') return null;
+  return trimmed;
+}
+
+/**
  * Headless-appropriate default player client configuration passed to yt-dlp.
  * Prioritizes `mweb` (recommended by yt-dlp devs in the PO-Token-Guide for headless
  * environments and token provider plugins) with `default` (`visionos,web`) as fallback.
@@ -189,6 +215,7 @@ export class YouTubeResolver {
     ytDlpTimeout = 30_000,
     ytDlpConfigPath = resolveYtDlpConfigPath(),
     ytDlpCookiesPath = resolveYtDlpCookiesPath(),
+    ytDlpJsRuntimes = resolveYtDlpJsRuntimes(),
     ytDlpPlayerClient = resolveYtDlpPlayerClient(),
     ytDlpPoToken = resolveYtDlpPoToken(),
     ytDlpPotProviderUrl = resolveYtDlpPotProviderUrl(),
@@ -201,6 +228,7 @@ export class YouTubeResolver {
     this.ytDlpTimeout = ytDlpTimeout;
     this.ytDlpConfigPath = ytDlpConfigPath || null;
     this.ytDlpCookiesPath = ytDlpCookiesPath || null;
+    this.ytDlpJsRuntimes = ytDlpJsRuntimes ?? null;
     this.ytDlpPlayerClient = ytDlpPlayerClient ?? null;
     this.ytDlpPoToken = ytDlpPoToken || null;
     this.ytDlpPotProviderUrl = ytDlpPotProviderUrl || null;
@@ -450,6 +478,19 @@ export class YouTubeResolver {
   async getYtDlpInfo(url, binaryPath, extraFlags = {}) {
     const args = ['--dump-single-json', '--no-warnings', '--format', 'bestaudio/best'];
     if (extraFlags.noPlaylist !== false) args.push('--no-playlist');
+
+    if (this.ytDlpJsRuntimes) {
+      if (Array.isArray(this.ytDlpJsRuntimes)) {
+        for (const runtime of this.ytDlpJsRuntimes) {
+          args.push('--js-runtimes', runtime);
+        }
+      } else {
+        for (const runtime of this.ytDlpJsRuntimes.split(',').map((s) => s.trim()).filter(Boolean)) {
+          args.push('--js-runtimes', runtime);
+        }
+      }
+    }
+
     // Optional, operator-configured auth/config, passed as discrete argv entries (never
     // through a shell) so a config file and/or cookies file can be supplied without
     // embedding any credentials in source. Omitted entirely when unset, preserving the
