@@ -67,6 +67,9 @@ function safeProcessError(error) {
 }
 
 const MAX_CAPTURED_STDERR_LENGTH = 2_000;
+// Trim only once the buffer grows well past the cap so routine output over a
+// long-running session doesn't force a slice on every single 'data' event.
+const STDERR_TRIM_THRESHOLD = MAX_CAPTURED_STDERR_LENGTH * 2;
 
 /**
  * Captures the provider child process's own stderr so startup failures (crash on an
@@ -78,11 +81,11 @@ function createStderrCapture(child) {
   let buffer = '';
   child.stderr?.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
-    if (buffer.length > MAX_CAPTURED_STDERR_LENGTH) {
+    if (buffer.length > STDERR_TRIM_THRESHOLD) {
       buffer = buffer.slice(buffer.length - MAX_CAPTURED_STDERR_LENGTH);
     }
   });
-  return () => buffer.replace(/[^\t\n\r\x20-\x7E]/g, '').trim();
+  return () => buffer.slice(-MAX_CAPTURED_STDERR_LENGTH).replace(/[^\t\n\r\x20-\x7E]/g, '').trim();
 }
 
 function withCapturedStderr(message, getStderrTail) {
