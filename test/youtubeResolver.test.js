@@ -675,7 +675,8 @@ test('yt-dlp fallback resolution passes custom js-runtimes or omits when explici
   let ytDlpInvocation;
   const resolverWithNone = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
-    ytDlpJsRuntimes: null,
+    ytDlpJsRuntimes: 'none',
+    ytDlpPlayerClient: 'none',
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -687,6 +688,7 @@ test('yt-dlp fallback resolution passes custom js-runtimes or omits when explici
 
   await resolverWithNone.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
   assert.ok(!ytDlpInvocation[1].includes('--js-runtimes'));
+  assert.ok(!ytDlpInvocation[1].includes('--extractor-args'));
 
   const resolverWithMultiple = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
@@ -701,10 +703,9 @@ test('yt-dlp fallback resolution passes custom js-runtimes or omits when explici
   });
 
   await resolverWithMultiple.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
-  assert.deepEqual(ytDlpInvocation[1].slice(0, 9), [
+  assert.deepEqual(ytDlpInvocation[1].slice(0, 7), [
     '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
-    '--js-runtimes', 'node',
-    '--js-runtimes', 'quickjs'
+    '--js-runtimes', 'node,quickjs'
   ]);
 });
 

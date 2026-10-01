@@ -153,6 +153,10 @@ export function resolveYtDlpPotProviderUrl(providerUrl = process.env.YOUTUBE_DL_
  * Resolves optional custom extractor args passed directly to yt-dlp via `--extractor-args`.
  */
 export function resolveYtDlpExtractorArgs(extractorArgs = process.env.YOUTUBE_DL_EXTRACTOR_ARGS) {
+  if (Array.isArray(extractorArgs)) {
+    const items = extractorArgs.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
+    return items.length ? items : null;
+  }
   return extractorArgs?.trim() || null;
 }
 
@@ -213,26 +217,26 @@ export class YouTubeResolver {
     ytDlpBinaryPath = process.env.YOUTUBE_DL_PATH,
     ytDlpRunner = runYtDlp,
     ytDlpTimeout = 30_000,
-    ytDlpConfigPath = resolveYtDlpConfigPath(),
-    ytDlpCookiesPath = resolveYtDlpCookiesPath(),
-    ytDlpJsRuntimes = resolveYtDlpJsRuntimes(),
-    ytDlpPlayerClient = resolveYtDlpPlayerClient(),
-    ytDlpPoToken = resolveYtDlpPoToken(),
-    ytDlpPotProviderUrl = resolveYtDlpPotProviderUrl(),
-    ytDlpExtractorArgs = resolveYtDlpExtractorArgs(),
+    ytDlpConfigPath,
+    ytDlpCookiesPath,
+    ytDlpJsRuntimes,
+    ytDlpPlayerClient,
+    ytDlpPoToken,
+    ytDlpPotProviderUrl,
+    ytDlpExtractorArgs,
     resolveYtDlpBinary = resolveYtDlpPath
   } = {}) {
     this.createClient = createClient;
     this.ytDlpBinaryPath = ytDlpBinaryPath || null;
     this.ytDlpRunner = ytDlpRunner;
     this.ytDlpTimeout = ytDlpTimeout;
-    this.ytDlpConfigPath = ytDlpConfigPath || null;
-    this.ytDlpCookiesPath = ytDlpCookiesPath || null;
-    this.ytDlpJsRuntimes = ytDlpJsRuntimes ?? null;
-    this.ytDlpPlayerClient = ytDlpPlayerClient ?? null;
-    this.ytDlpPoToken = ytDlpPoToken || null;
-    this.ytDlpPotProviderUrl = ytDlpPotProviderUrl || null;
-    this.ytDlpExtractorArgs = ytDlpExtractorArgs || null;
+    this.ytDlpConfigPath = resolveYtDlpConfigPath(ytDlpConfigPath);
+    this.ytDlpCookiesPath = resolveYtDlpCookiesPath(ytDlpCookiesPath);
+    this.ytDlpJsRuntimes = resolveYtDlpJsRuntimes(ytDlpJsRuntimes);
+    this.ytDlpPlayerClient = resolveYtDlpPlayerClient(ytDlpPlayerClient);
+    this.ytDlpPoToken = resolveYtDlpPoToken(ytDlpPoToken);
+    this.ytDlpPotProviderUrl = resolveYtDlpPotProviderUrl(ytDlpPotProviderUrl);
+    this.ytDlpExtractorArgs = resolveYtDlpExtractorArgs(ytDlpExtractorArgs);
     this.resolveYtDlpBinary = resolveYtDlpBinary;
     this.clientPromise = null;
   }
@@ -480,14 +484,15 @@ export class YouTubeResolver {
     if (extraFlags.noPlaylist !== false) args.push('--no-playlist');
 
     if (this.ytDlpJsRuntimes) {
-      if (Array.isArray(this.ytDlpJsRuntimes)) {
-        for (const runtime of this.ytDlpJsRuntimes) {
-          args.push('--js-runtimes', runtime);
-        }
-      } else {
-        for (const runtime of this.ytDlpJsRuntimes.split(',').map((s) => s.trim()).filter(Boolean)) {
-          args.push('--js-runtimes', runtime);
-        }
+      const runtimes = Array.isArray(this.ytDlpJsRuntimes)
+        ? this.ytDlpJsRuntimes
+        : this.ytDlpJsRuntimes.split(',');
+      const joined = runtimes
+        .map((runtime) => (typeof runtime === 'string' ? runtime.trim() : ''))
+        .filter(Boolean)
+        .join(',');
+      if (joined) {
+        args.push('--js-runtimes', joined);
       }
     }
 
