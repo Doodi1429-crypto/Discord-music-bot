@@ -172,23 +172,123 @@ export function resolveYtDlpExtractorArgs(extractorArgs = process.env.YOUTUBE_DL
   return extractorArgs?.trim() || null;
 }
 
-function runYtDlp(binaryPath, args, { timeout }) {
-  return new Promise((resolve, reject) => {
-    execFile(binaryPath, args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, timeout, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
-      if (error) {
-        error.stderr = stderr;
-        reject(error);
-        return;
-      }
-
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (parseError) {
-        parseError.message = `yt-dlp returned invalid JSON: ${parseError.message}`;
-        reject(parseError);
-      }
-    });
+function executeYtDlp(execFileImpl, binaryPath, args, timeout) {
+  return new Promise((resolve) => {
+    try {
+      execFileImpl(binaryPath, args, {
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024,
+        timeout,
+        killSignal: 'SIGKILL'
+      }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+    } catch (error) {
+      resolve({ error, stdout: '', stderr: '' });
+    }
   });
+}
+
+function diagnosticLines(output, pattern, sensitiveValues) {
+  return output.split(/\r?\n/)
+    .filter((line) => pattern.test(line))
+    .slice(0, 10)
+    .map((line) => sanitizeDetails(line, sensitiveValues).slice(0, 300));
+}
+
+function availabilityFromLines(lines) {
+  if (!lines.length) return 'not reported';
+  if (lines.some((line) => /not available|unavailable|not installed|disabled|missing/i.test(line))) {
+    return 'unavailable';
+  }
+  if (lines.some((line) => /available|loaded|installed|enabled|found/i.test(line))) return 'available';
+  return 'reported';
+}
+
+function reportYtDlpDiagnostics({ version, stderr, error, exitCode, diagnostics, sensitiveValues }) {
+  const ejsLines = diagnosticLines(stderr, /yt-dlp-ejs|\bejs\b/i, sensitiveValues);
+  const providerLines = diagnosticLines(stderr, /pot[-_ ]provider|challenge provider|po token provider/i, sensitiveValues);
+  const playerClientLines = diagnosticLines(stderr, /player[-_]client/i, sensitiveValues);
+  const runtimeLines = diagnosticLines(stderr, /(?:javascript|js) runtimes?/i, sensitiveValues);
+  const poTokenLines = diagnosticLines(stderr, /po[-_ ]token/i, sensitiveValues);
+  const poTokenRequired = poTokenLines.some((line) =>
+    /(?:po[-_ ]token).{0,60}(?:required|requires)|(?:required|requires).{0,60}(?:po[-_ ]token)/i.test(line)
+      && !/(?:not required|not needed|no po[-_ ]token required|optional)/i.test(line)
+  );
+  const errorOutput = !error
+    ? null
+    : diagnostics.cookiesConfigured
+      ? '[omitted because a cookie file is configured]'
+      : sanitizeDetails(stderr.trim() || error.message || String(error), sensitiveValues).slice(0, MAX_ERROR_DETAILS_LENGTH);
+
+  logger.info('yt-dlp diagnostic report', {
+    ytDlpVersion: version,
+    nodeVersion: process.version,
+    configuredJsRuntimes: diagnostics.configuredJsRuntimes,
+    detectedJsRuntimeOutput: runtimeLines,
+    ejsAvailability: availabilityFromLines(ejsLines),
+    ejsOutput: ejsLines,
+    challengeProviderConfigured: diagnostics.challengeProviderConfigured,
+    challengeProviderAvailability: availabilityFromLines(providerLines),
+    challengeProviderOutput: providerLines,
+    configuredPlayerClient: diagnostics.configuredPlayerClient,
+    playerClientPolicy: diagnostics.configuredPlayerClient
+      ? 'explicitly configured'
+      : diagnostics.configFileConfigured
+        ? 'not explicitly configured by resolver; yt-dlp/config selection applies'
+        : 'yt-dlp default',
+    reportedPlayerClients: playerClientLines,
+    poTokenConfigured: diagnostics.poTokenConfigured,
+    poTokenRequired,
+    poTokenRequirementReported: poTokenRequired || /po[-_ ]token/i.test(stderr),
+    extractorConfiguration: diagnostics.extractorConfiguration,
+    configFileConfigured: diagnostics.configFileConfigured,
+    cookiesConfigured: diagnostics.cookiesConfigured,
+    exitCode,
+    errorOutput
+  });
+}
+
+export async function runYtDlp(binaryPath, args, {
+  timeout,
+  debug = false,
+  diagnostics = {},
+  sensitiveValues = [],
+  execFileImpl = execFile
+}) {
+  let version = null;
+  if (debug) {
+    const versionResult = await executeYtDlp(execFileImpl, binaryPath, ['--version'], timeout);
+    if (!versionResult.error) {
+      version = sanitizeDetails(versionResult.stdout.trim().split(/\r?\n/, 1)[0], sensitiveValues).slice(0, 80) || null;
+    }
+  }
+
+  const { error, stdout, stderr } = await executeYtDlp(execFileImpl, binaryPath, args, timeout);
+  const exitCode = error
+    ? (Number.isInteger(error.code) ? error.code : Number.isInteger(error.status) ? error.status : null)
+    : 0;
+
+  if (debug) {
+    reportYtDlpDiagnostics({
+      version,
+      stderr: stderr || error?.stderr || '',
+      error,
+      exitCode,
+      diagnostics,
+      sensitiveValues
+    });
+  }
+
+  if (error) {
+    error.stderr = stderr || error.stderr;
+    throw error;
+  }
+
+  try {
+    return JSON.parse(stdout);
+  } catch (parseError) {
+    parseError.message = `yt-dlp returned invalid JSON: ${parseError.message}`;
+    throw parseError;
+  }
 }
 
 /**
@@ -203,7 +303,12 @@ export function sanitizeDetails(details, sensitiveValues = []) {
       sanitized = sanitized.split(value).join('[REDACTED]');
     }
   }
-  return sanitized.replace(/(po_token=)[^\s;&"',]+/gi, '$1[REDACTED]');
+  return sanitized
+    .replace(/(\bhttps?:\/\/)[^/@\s]+@/gi, '$1[REDACTED]@')
+    .replace(/(authorization|proxy-authorization|cookie|set-cookie)(\s*:\s*)[^\r\n]*/gi, '$1$2[REDACTED]')
+    .replace(/(^|\r?\n)(?:#HttpOnly_)?\.?[a-z0-9.-]+\s+(?:TRUE|FALSE)\s+\/\S*\s+(?:TRUE|FALSE)\s+\d+\s+\S+\s+\S+(?=\r?$)/gim, '$1[REDACTED COOKIE ROW]')
+    .replace(/(--(?:cookies(?:-from-browser)?|username|password|ap-username|ap-password|netrc-cmd))(?:["']?\s*,\s*["']?|=|\s+)(?:"[^"]*"|'[^']*'|[^\s,\]]+)/gi, '$1 [REDACTED]')
+    .replace(/((?:po[-_]?token|(?:access|refresh|auth|id)?[-_]?token|api[-_]?key|client[-_]?secret|client[-_]?id|secret|password|passwd|username|credential|authorization|auth|key|cookie|cookies)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&;,]+)/gi, '$1[REDACTED]');
 }
 
 export function errorDetails(error, sensitiveValues = []) {
@@ -492,7 +597,11 @@ export class YouTubeResolver {
   }
 
   async getYtDlpInfo(url, binaryPath, extraFlags = {}) {
-    const args = ['--dump-single-json', '--no-warnings', '--format', 'bestaudio/best'];
+    const debug = process.env.YOUTUBE_DL_DEBUG?.trim().toLowerCase() === 'true';
+    const args = ['--dump-single-json'];
+    if (!debug) args.push('--no-warnings');
+    if (debug) args.push('--verbose');
+    args.push('--format', 'bestaudio/best');
     if (extraFlags.noPlaylist !== false) args.push('--no-playlist');
 
     if (this.ytDlpJsRuntimes) {
@@ -520,6 +629,34 @@ export class YouTubeResolver {
     }
 
     args.push(url);
-    return this.ytDlpRunner(binaryPath, args, { timeout: this.ytDlpTimeout });
+    if (!debug) return this.ytDlpRunner(binaryPath, args, { timeout: this.ytDlpTimeout });
+
+    const configuredPlayerClient = this.ytDlpPlayerClient
+      || this.buildExtractorArgs().map((value) => value.match(/player[-_]client=([^;,\s]+)/i)?.[1]).find(Boolean)
+      || null;
+    const extractorConfiguration = sanitizeDetails(
+      this.buildExtractorArgs().join(';'),
+      [this.ytDlpPoToken, process.env.YOUTUBE_DL_PO_TOKEN]
+    );
+
+    return this.ytDlpRunner(binaryPath, args, {
+      timeout: this.ytDlpTimeout,
+      debug: true,
+      diagnostics: {
+        configuredJsRuntimes: sanitizeDetails(
+          Array.isArray(this.ytDlpJsRuntimes) ? this.ytDlpJsRuntimes.join(',') : this.ytDlpJsRuntimes || 'not configured',
+          [this.ytDlpPoToken, process.env.YOUTUBE_DL_PO_TOKEN]
+        ),
+        configuredPlayerClient: configuredPlayerClient
+          ? sanitizeDetails(configuredPlayerClient, [this.ytDlpPoToken, process.env.YOUTUBE_DL_PO_TOKEN])
+          : null,
+        challengeProviderConfigured: Boolean(this.ytDlpPotProviderUrl),
+        poTokenConfigured: Boolean(this.ytDlpPoToken),
+        extractorConfiguration: extractorConfiguration || 'yt-dlp defaults',
+        configFileConfigured: Boolean(this.ytDlpConfigPath),
+        cookiesConfigured: Boolean(this.ytDlpCookiesPath)
+      },
+      sensitiveValues: [this.ytDlpPoToken, process.env.YOUTUBE_DL_PO_TOKEN].filter(Boolean)
+    });
   }
 }
