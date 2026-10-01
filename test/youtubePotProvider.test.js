@@ -8,7 +8,7 @@ import {
   startYtDlpPotProvider
 } from '../src/resolvers/ytDlpPotProvider.js';
 
-function fakeChild() {
+function fakeChild({ withStderr = false } = {}) {
   const child = new EventEmitter();
   child.exitCode = null;
   child.killed = false;
@@ -19,6 +19,7 @@ function fakeChild() {
     child.exitCode = signal === 'SIGTERM' ? 0 : 137;
     child.emit('exit', child.exitCode, signal);
   };
+  if (withStderr) child.stderr = new EventEmitter();
   return child;
 }
 
@@ -90,7 +91,7 @@ test('provider starts on loopback, waits for the pinned version, and stops clean
     '--port',
     '4416'
   ]);
-  assert.deepEqual(spawnRequest[2], { stdio: 'ignore', windowsHide: true });
+  assert.deepEqual(spawnRequest[2], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
   await provider.stop();
   assert.deepEqual(child.killSignals, ['SIGTERM']);
 });
@@ -134,4 +135,77 @@ test('provider startup rejects a mismatched server version', async () => {
     fetchImpl: async () => new Response(JSON.stringify({ version: '1.3.2' }), { status: 200 }),
     timeoutMs: 100
   }), /incompatible version/);
+});
+
+// Reproduces the exact Render failure mode: the provider process never exits and never
+// becomes reachable on /ping within the deadline, previously surfacing only a generic
+// "did not become ready" message with no indication of why. The child's own stderr
+// (e.g. a bind failure logged by the provider itself) must now be captured and included.
+test('provider startup timeout surfaces captured provider stderr for diagnosis', async () => {
+  const child = fakeChild({ withStderr: true });
+  const starting = startYtDlpPotProvider({
+    env: {},
+    spawnImpl: () => {
+      process.nextTick(() => {
+        child.stderr.emit('data', Buffer.from('Could not listen on 127.0.0.1:4416 (Caused by EADDRINUSE)\n'));
+      });
+      return child;
+    },
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+    timeoutMs: 50,
+    pollIntervalMs: 5
+  });
+
+  await assert.rejects(starting, (error) => {
+    assert.match(error.message, /did not become ready within 50ms/);
+    assert.match(error.message, /Provider stderr: Could not listen on 127\.0\.0\.1:4416 \(Caused by EADDRINUSE\)/);
+    return true;
+  });
+  assert.ok(child.killSignals.includes('SIGTERM'));
+});
+
+test('provider startup reports captured stderr when the child exits before becoming ready', async () => {
+  const child = fakeChild({ withStderr: true });
+  const starting = startYtDlpPotProvider({
+    env: {},
+    spawnImpl: () => {
+      process.nextTick(() => {
+        child.stderr.emit('data', Buffer.from('TypeError: Cannot find module \'canvas\'\n'));
+        child.exitCode = 1;
+        child.emit('exit', 1, null);
+      });
+      return child;
+    },
+    fetchImpl: async () => { throw new Error('unreachable'); },
+    timeoutMs: 200,
+    pollIntervalMs: 5
+  });
+
+  await assert.rejects(starting, (error) => {
+    assert.match(error.message, /exited before becoming ready/);
+    assert.match(error.message, /Provider stderr: TypeError: Cannot find module 'canvas'/);
+    return true;
+  });
+});
+
+test('provider startup diagnostics strip control characters and cap captured stderr length', async () => {
+  const child = fakeChild({ withStderr: true });
+  const hugeChunk = `${'x'.repeat(2_500)}\u0007tail-marker`;
+  const starting = startYtDlpPotProvider({
+    env: {},
+    spawnImpl: () => {
+      process.nextTick(() => child.stderr.emit('data', Buffer.from(hugeChunk)));
+      return child;
+    },
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+    timeoutMs: 50,
+    pollIntervalMs: 5
+  });
+
+  await assert.rejects(starting, (error) => {
+    assert.ok(error.message.includes('tail-marker'));
+    assert.ok(!error.message.includes('\u0007'));
+    assert.ok(error.message.length < hugeChunk.length);
+    return true;
+  });
 });
