@@ -102,7 +102,7 @@ export const DEFAULT_YT_DLP_PLAYER_CLIENT = 'mweb,default';
  */
 export function resolveYtDlpPlayerClient(playerClient = process.env.YOUTUBE_DL_PLAYER_CLIENT) {
   if (playerClient === undefined) return DEFAULT_YT_DLP_PLAYER_CLIENT;
-  const trimmed = playerClient.trim();
+  const trimmed = playerClient?.trim();
   if (!trimmed || trimmed.toLowerCase() === 'none') return null;
   return trimmed;
 }

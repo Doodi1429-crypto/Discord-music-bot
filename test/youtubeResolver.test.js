@@ -438,6 +438,7 @@ test('does not fall back to yt-dlp when the built-in client reports a user input
 
 test('resolveYtDlpPlayerClient resolves defaults, trimmed strings, and none/empty', () => {
   assert.equal(resolveYtDlpPlayerClient(undefined), DEFAULT_YT_DLP_PLAYER_CLIENT);
+  assert.equal(resolveYtDlpPlayerClient(null), null);
   assert.equal(resolveYtDlpPlayerClient('  mweb,tv  '), 'mweb,tv');
   assert.equal(resolveYtDlpPlayerClient(''), null);
   assert.equal(resolveYtDlpPlayerClient('   '), null);
