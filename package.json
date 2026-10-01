@@ -12,7 +12,7 @@
     "deploy-commands": "node src/deploy-commands.js",
     "dev": "node --watch src/index.js",
     "test": "node --test",
-    "postinstall": "node scripts/install-yt-dlp.js"
+    "postinstall": "node scripts/install-runtime.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
