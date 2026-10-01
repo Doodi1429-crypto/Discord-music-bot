@@ -4,6 +4,7 @@ import { MusicManager } from './music/MusicManager.js';
 import { userMessage } from './utils/errors.js';
 import { logger } from './utils/logger.js';
 import { loginWithTimeout } from './startup.js';
+import { startYtDlpPotProvider } from './resolvers/ytDlpPotProvider.js';
 import { data as join, execute as joinExecute } from './commands/join.js';
 import { data as play, execute as playExecute } from './commands/play.js';
 import { data as pause, execute as pauseExecute } from './commands/pause.js';
@@ -50,18 +51,44 @@ function safeDestroy(destroyableClient) {
   try { destroyableClient.destroy().catch(() => {}); } catch { /* best-effort cleanup only */ }
 }
 
-process.on('SIGINT', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
-process.on('SIGTERM', () => { manager.destroyAll(); client.destroy(); process.exit(0); });
-logger.info('Connecting to Discord gateway...');
-loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
-  .catch(error => {
-    logger.error('Login failed', { message: error.message });
-    // Don't await destroy(): on the exact failure this guards against (a stuck/blackholed
-    // connection), destroy() could hang for the same reason login did, which would defeat the
-    // point of exiting promptly. Let it run best-effort in the background.
-    safeDestroy(client);
-    // setImmediate gives the logger's synchronous console write and the destroy() call above a
-    // turn of the event loop before the process terminates; exit explicitly since a hung
-    // connection's open sockets could otherwise keep the event loop alive indefinitely.
-    setImmediate(() => process.exit(1));
-  });
+let stopPotProvider = async () => {};
+
+async function shutdown() {
+  manager.destroyAll();
+  client.destroy();
+  await stopPotProvider();
+  process.exit(0);
+}
+
+process.on('SIGINT', () => { void shutdown(); });
+process.on('SIGTERM', () => { void shutdown(); });
+
+async function start() {
+  try {
+    const provider = await startYtDlpPotProvider();
+    stopPotProvider = provider.stop;
+    if (provider.started) logger.info('Local YouTube PO-token provider is ready.');
+  } catch (error) {
+    logger.error('Local YouTube PO-token provider failed to start; yt-dlp fallback may fail', {
+      message: error.message
+    });
+  }
+
+  logger.info('Connecting to Discord gateway...');
+  loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
+    .catch(error => {
+      logger.error('Login failed', { message: error.message });
+      // Don't await destroy(): on the exact failure this guards against (a stuck/blackholed
+      // connection), destroy() could hang for the same reason login did, which would defeat the
+      // point of exiting promptly. Let it run best-effort in the background.
+      safeDestroy(client);
+      // setImmediate gives the logger's synchronous console write and the destroy() call above a
+      // turn of the event loop before the process terminates; exit explicitly since a hung
+      // connection's open sockets could otherwise keep the event loop alive indefinitely.
+      setImmediate(() => {
+        void stopPotProvider().finally(() => process.exit(1));
+      });
+    });
+}
+
+void start();

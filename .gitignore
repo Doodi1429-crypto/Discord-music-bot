@@ -23,3 +23,6 @@ yt-dlp.config
 # (see YOUTUBE_DL_PATH / YOUTUBE_DL_SKIP_INSTALL in .env.example). Never committed;
 # re-downloaded automatically on every install.
 /bin/
+
+# Pinned upstream bgutil PO-token provider source and its runtime dependencies.
+/.bgutil-ytdlp-pot-provider/

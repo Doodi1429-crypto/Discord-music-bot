@@ -4,7 +4,10 @@ import { delimiter, join } from 'node:path';
 import { extractVideoId, isValidVideoId } from './urlUtils.js';
 import { UserInputError, AudioSourceError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
-import { YT_DLP_DEFAULT_PATH } from './ytDlpPaths.js';
+import { BGUTIL_PROVIDER_PLUGIN_DIR, YT_DLP_DEFAULT_PATH } from './ytDlpPaths.js';
+import {
+  resolveYtDlpPotProviderConfig
+} from './ytDlpPotProvider.js';
 
 const YOUTUBE_SEARCH_PREFIX = 'ytsearch1:';
 const MAX_ERROR_DETAILS_LENGTH = 1200;
@@ -120,26 +123,22 @@ export function resolveYtDlpJsRuntimes(jsRuntimes = process.env.YOUTUBE_DL_JS_RU
 }
 
 /**
- * Default player client configuration passed to yt-dlp.
- * Defaults to null (unset), leaving yt-dlp's built-in client selection policy in
- * control when the operator has not configured YOUTUBE_DL_PLAYER_CLIENT.
- *
- * Current official YouTube extractor documentation notes that yt-dlp uses default
- * clients that currently do not require PO tokens, and recommends `mweb` *with a PO Token*
- * when defaults fail. Therefore, unconditionally forcing `player_client=mweb,default`
- * is not supported as a general no-token headless configuration. Operators can
- * explicitly set YOUTUBE_DL_PLAYER_CLIENT (e.g. `mweb` when pairing with a PO token)
- * or disable it with 'none'.
+ * The provider-backed fallback uses mweb by default so yt-dlp requests the player/GVS
+ * PO-token contexts which the upstream bgutil provider can generate. Operators may
+ * override this with YOUTUBE_DL_PLAYER_CLIENT or disable it with 'none'.
  */
-export const DEFAULT_YT_DLP_PLAYER_CLIENT = null;
+export const DEFAULT_YT_DLP_PLAYER_CLIENT = 'mweb';
 
 /**
  * Resolves operator-configurable player client(s) to pass via `--extractor-args "youtube:player_client=..."`.
  * Defaults to `DEFAULT_YT_DLP_PLAYER_CLIENT` (null, leaving yt-dlp's built-in policy in control).
  * Setting to empty string or 'none' disables passing player_client.
  */
-export function resolveYtDlpPlayerClient(playerClient = process.env.YOUTUBE_DL_PLAYER_CLIENT) {
-  if (playerClient === undefined) return DEFAULT_YT_DLP_PLAYER_CLIENT;
+export function resolveYtDlpPlayerClient(
+  playerClient = process.env.YOUTUBE_DL_PLAYER_CLIENT,
+  providerEnabled = resolveYtDlpPotProviderConfig().enabled
+) {
+  if (playerClient === undefined) return providerEnabled ? DEFAULT_YT_DLP_PLAYER_CLIENT : null;
   const trimmed = playerClient?.trim();
   if (!trimmed || trimmed.toLowerCase() === 'none') return null;
   return trimmed;
@@ -158,18 +157,27 @@ export function resolveYtDlpPoToken(poToken = process.env.YOUTUBE_DL_PO_TOKEN) {
  * Passed to yt-dlp via `--extractor-args "youtube:pot-provider=bgutil+..."`.
  */
 export function resolveYtDlpPotProviderUrl(providerUrl = process.env.YOUTUBE_DL_POT_PROVIDER_URL) {
-  return providerUrl?.trim() || null;
+  return resolveYtDlpPotProviderConfig({ providerUrl }).baseUrl;
 }
 
 /**
  * Resolves optional custom extractor args passed directly to yt-dlp via `--extractor-args`.
  */
 export function resolveYtDlpExtractorArgs(extractorArgs = process.env.YOUTUBE_DL_EXTRACTOR_ARGS) {
+  const validateProviderUrl = (value) => {
+    const providerUrlArgs = /(?:youtubepot-bgutilhttp:base_url|pot[-_]provider)\s*=\s*([^;,\s]+)/gi;
+    for (const match of value.matchAll(providerUrlArgs)) {
+      resolveYtDlpPotProviderUrl(match[1]);
+    }
+  };
   if (Array.isArray(extractorArgs)) {
     const items = extractorArgs.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
+    for (const item of items) validateProviderUrl(item);
     return items.length ? items : null;
   }
-  return extractorArgs?.trim() || null;
+  const normalized = extractorArgs?.trim() || null;
+  if (normalized) validateProviderUrl(normalized);
+  return normalized;
 }
 
 function executeYtDlp(execFileImpl, binaryPath, args, timeout) {
@@ -307,6 +315,7 @@ export function sanitizeDetails(details, sensitiveValues = []) {
     .replace(/(\bhttps?:\/\/)[^/@\s]+@/gi, '$1[REDACTED]@')
     .replace(/(authorization|proxy-authorization|cookie|set-cookie)(\s*:\s*)[^\r\n]*/gi, '$1$2[REDACTED]')
     .replace(/(^|\r?\n)(?:#HttpOnly_)?\.?[a-z0-9.-]+\s+(?:TRUE|FALSE)\s+\/\S*\s+(?:TRUE|FALSE)\s+\d+\s+\S+\s+\S+(?=\r?$)/gim, '$1[REDACTED COOKIE ROW]')
+    .replace(/(Generated POT\s*:\s*)[^\s,;]+/gi, '$1[REDACTED]')
     .replace(/(--(?:cookies(?:-from-browser)?|username|password|ap-username|ap-password|netrc-cmd))(?:["']?\s*,\s*["']?|=|\s+)(?:"[^"]*"|'[^']*'|[^\s,\]]+)/gi, '$1 [REDACTED]')
     .replace(/((?:po[-_]?token|(?:access|refresh|auth|id)?[-_]?token|api[-_]?key|client[-_]?secret|client[-_]?id|secret|password|passwd|username|credential|authorization|auth|key|cookie|cookies)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&;,]+)/gi, '$1[REDACTED]');
 }
@@ -340,6 +349,8 @@ export class YouTubeResolver {
     ytDlpPlayerClient,
     ytDlpPoToken,
     ytDlpPotProviderUrl,
+    ytDlpPotProviderEnabled,
+    ytDlpPotPluginDir = BGUTIL_PROVIDER_PLUGIN_DIR,
     ytDlpExtractorArgs,
     resolveYtDlpBinary = resolveYtDlpPath
   } = {}) {
@@ -350,9 +361,17 @@ export class YouTubeResolver {
     this.ytDlpConfigPath = resolveYtDlpConfigPath(ytDlpConfigPath);
     this.ytDlpCookiesPath = resolveYtDlpCookiesPath(ytDlpCookiesPath);
     this.ytDlpJsRuntimes = resolveYtDlpJsRuntimes(ytDlpJsRuntimes);
-    this.ytDlpPlayerClient = resolveYtDlpPlayerClient(ytDlpPlayerClient);
+    this.ytDlpPotProviderEnabled = ytDlpPotProviderEnabled
+      ?? resolveYtDlpPotProviderConfig({ providerUrl: ytDlpPotProviderUrl }).enabled;
+    this.ytDlpPlayerClient = resolveYtDlpPlayerClient(
+      ytDlpPlayerClient,
+      this.ytDlpPotProviderEnabled
+    );
     this.ytDlpPoToken = resolveYtDlpPoToken(ytDlpPoToken);
-    this.ytDlpPotProviderUrl = resolveYtDlpPotProviderUrl(ytDlpPotProviderUrl);
+    this.ytDlpPotProviderUrl = this.ytDlpPotProviderEnabled
+      ? resolveYtDlpPotProviderUrl(ytDlpPotProviderUrl)
+      : null;
+    this.ytDlpPotPluginDir = this.ytDlpPotProviderEnabled ? ytDlpPotPluginDir : null;
     this.ytDlpExtractorArgs = resolveYtDlpExtractorArgs(ytDlpExtractorArgs);
     this.resolveYtDlpBinary = resolveYtDlpBinary;
     this.clientPromise = null;
@@ -525,10 +544,7 @@ export class YouTubeResolver {
     }
 
     if (this.ytDlpPotProviderUrl && !hasProviderInCustomArgs) {
-      const provider = this.ytDlpPotProviderUrl.startsWith('bgutil+')
-        ? this.ytDlpPotProviderUrl
-        : `bgutil+${this.ytDlpPotProviderUrl}`;
-      list.push(`youtube:pot-provider=${provider}`);
+      list.push(`youtubepot-bgutilhttp:base_url=${this.ytDlpPotProviderUrl}`);
     }
 
     if (this.ytDlpExtractorArgs) {
@@ -616,6 +632,8 @@ export class YouTubeResolver {
         args.push('--js-runtimes', joined);
       }
     }
+
+    if (this.ytDlpPotPluginDir) args.push('--plugin-dirs', this.ytDlpPotPluginDir);
 
     // Optional, operator-configured auth/config, passed as discrete argv entries (never
     // through a shell) so a config file and/or cookies file can be supplied without

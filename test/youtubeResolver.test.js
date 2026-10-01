@@ -17,6 +17,7 @@ import {
   DEFAULT_YT_DLP_PLAYER_CLIENT
 } from '../src/resolvers/YouTubeResolver.js';
 import { YT_DLP_DEFAULT_PATH } from '../src/resolvers/ytDlpPaths.js';
+import { BGUTIL_PROVIDER_PLUGIN_DIR } from '../src/resolvers/ytDlpPaths.js';
 import { UserInputError, AudioSourceError } from '../src/utils/errors.js';
 import { logger } from '../src/utils/logger.js';
 
@@ -232,6 +233,7 @@ test('falls back to an explicitly configured yt-dlp binary only after built-in r
   let ytDlpInvocation;
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -264,6 +266,7 @@ test('search falls back to yt-dlp only after built-in search fails', async () =>
   const invocations = [];
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       search: async () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -306,6 +309,7 @@ test('yt-dlp fallback resolution passes configured config/cookies paths as discr
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpConfigPath: '/etc/yt-dlp/config.conf',
     ytDlpCookiesPath: '/secrets/cookies.txt',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -336,6 +340,7 @@ test('yt-dlp search fallback passes configured config/cookies paths as discrete 
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpConfigPath: '/etc/yt-dlp/config.conf',
     ytDlpCookiesPath: '/secrets/cookies.txt',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       search: async () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -456,7 +461,7 @@ test('resolveYtDlpJsRuntimes resolves default node, trimmed strings, arrays, and
 
 test('resolveYtDlpPlayerClient resolves defaults, trimmed strings, and none/empty', () => {
   assert.equal(resolveYtDlpPlayerClient(undefined), DEFAULT_YT_DLP_PLAYER_CLIENT);
-  assert.equal(resolveYtDlpPlayerClient(undefined), null);
+  assert.equal(resolveYtDlpPlayerClient(undefined, false), null);
   assert.equal(resolveYtDlpPlayerClient(null), null);
   assert.equal(resolveYtDlpPlayerClient('  mweb,tv  '), 'mweb,tv');
   assert.equal(resolveYtDlpPlayerClient(''), null);
@@ -470,13 +475,17 @@ test('resolveYtDlpPoToken, resolveYtDlpPotProviderUrl, and resolveYtDlpExtractor
   assert.equal(resolveYtDlpPoToken(''), null);
   assert.equal(resolveYtDlpPoToken('  web+token123  '), 'web+token123');
 
-  assert.equal(resolveYtDlpPotProviderUrl(undefined), null);
-  assert.equal(resolveYtDlpPotProviderUrl(''), null);
-  assert.equal(resolveYtDlpPotProviderUrl('  http://provider.local:4444  '), 'http://provider.local:4444');
+  assert.equal(resolveYtDlpPotProviderUrl(undefined), 'http://127.0.0.1:4416');
+  assert.equal(resolveYtDlpPotProviderUrl(''), 'http://127.0.0.1:4416');
+  assert.equal(resolveYtDlpPotProviderUrl('  http://127.0.0.1:4444  '), 'http://127.0.0.1:4444');
 
   assert.equal(resolveYtDlpExtractorArgs(undefined), null);
   assert.equal(resolveYtDlpExtractorArgs(''), null);
   assert.equal(resolveYtDlpExtractorArgs('  youtube:player_client=android  '), 'youtube:player_client=android');
+  assert.throws(
+    () => resolveYtDlpExtractorArgs('youtubepot-bgutilhttp:base_url=http://provider.example:4416'),
+    /local HTTP service/
+  );
 });
 
 test('sanitizeDetails masks sensitive tokens and po_token arguments', () => {
@@ -511,6 +520,7 @@ test('sanitizeDetails redacts token, cookie, credential, and authorization forma
     assert.equal(sanitized.includes(secret), false, `expected ${secret} to be redacted`);
   }
   assert.equal(errorDetails({ message: raw }).includes('COOKIE_SECRET'), false);
+  assert.equal(sanitizeDetails('Generated POT: GENERATED_PO_TOKEN_VALUE'), 'Generated POT: [REDACTED]');
 });
 
 test('YOUTUBE_DL_DEBUG gates verbose invocation and diagnostic metadata', async () => {
@@ -634,7 +644,7 @@ test('yt-dlp fallback resolution passes custom PO-token and provider as discrete
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpPoToken: 'my_po_token_xyz',
-    ytDlpPotProviderUrl: 'http://pot.local:4444',
+    ytDlpPotProviderUrl: 'http://127.0.0.1:4444',
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -651,19 +661,21 @@ test('yt-dlp fallback resolution passes custom PO-token and provider as discrete
     [
       '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
       '--js-runtimes', 'node',
+      '--plugin-dirs', BGUTIL_PROVIDER_PLUGIN_DIR,
+      '--extractor-args', 'youtube:player_client=mweb',
       '--extractor-args', 'youtube:po_token=my_po_token_xyz',
-      '--extractor-args', 'youtube:pot-provider=bgutil+http://pot.local:4444',
+      '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4444',
       'https://youtube.com/watch?v=abcdefghijk'
     ],
     { timeout: 30_000 }
   ]);
 });
 
-test('yt-dlp fallback resolution does not duplicate bgutil+ prefix if already present', async () => {
+test('yt-dlp fallback uses the upstream bgutil HTTP provider configuration', async () => {
   let ytDlpInvocation;
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
-    ytDlpPotProviderUrl: 'bgutil+http://pot.local:4444',
+    ytDlpPotProviderUrl: 'http://127.0.0.1:4444',
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -675,11 +687,11 @@ test('yt-dlp fallback resolution does not duplicate bgutil+ prefix if already pr
 
   await resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
 
-  assert.ok(ytDlpInvocation[1].includes('youtube:pot-provider=bgutil+http://pot.local:4444'));
-  assert.ok(!ytDlpInvocation[1].includes('bgutil+bgutil+'));
+  assert.ok(ytDlpInvocation[1].includes('youtubepot-bgutilhttp:base_url=http://127.0.0.1:4444'));
+  assert.ok(ytDlpInvocation[1].includes('--plugin-dirs'));
 });
 
-test('yt-dlp fallback resolution omits player_client by default and when explicitly set to null/none', async () => {
+test('yt-dlp fallback requests provider-backed mweb PO tokens by default', async () => {
   let ytDlpInvocation;
   const defaultResolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
@@ -694,19 +706,15 @@ test('yt-dlp fallback resolution omits player_client by default and when explici
 
   await defaultResolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
 
-  assert.deepEqual(ytDlpInvocation, [
-    '/configured/yt-dlp',
-    [
-      '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
-      '--js-runtimes', 'node',
-      'https://youtube.com/watch?v=abcdefghijk'
-    ],
-    { timeout: 30_000 }
-  ]);
+  assert.equal(ytDlpInvocation[1].includes('--plugin-dirs'), true);
+  assert.ok(ytDlpInvocation[1].includes('--extractor-args'));
+  assert.ok(ytDlpInvocation[1].includes('youtube:player_client=mweb'));
+  assert.ok(ytDlpInvocation[1].includes('youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416'));
 
   const nullResolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpPlayerClient: null,
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -722,6 +730,7 @@ test('yt-dlp fallback resolution omits player_client by default and when explici
   const noneResolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpPlayerClient: 'none',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -740,6 +749,7 @@ test('yt-dlp fallback resolution passes explicit player_client override when con
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpPlayerClient: 'mweb',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -765,6 +775,7 @@ test('yt-dlp fallback resolution passes explicit player_client override when con
   const resolverWithFallback = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpPlayerClient: 'mweb,default',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -793,6 +804,7 @@ test('custom extractor args override explicit player_client and pass discrete en
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpPlayerClient: 'mweb',
+    ytDlpPotProviderEnabled: false,
     ytDlpExtractorArgs: ['youtube:player_client=android', 'generic:foo=bar'],
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
@@ -824,6 +836,7 @@ test('custom extractor args preserve explicit player_client when not overridden'
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpPlayerClient: 'mweb',
     ytDlpExtractorArgs: 'generic:foo=bar',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -925,6 +938,7 @@ test('yt-dlp fallback resolution passes custom js-runtimes or omits when explici
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpJsRuntimes: 'none',
     ytDlpPlayerClient: 'none',
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -941,6 +955,7 @@ test('yt-dlp fallback resolution passes custom js-runtimes or omits when explici
   const resolverWithMultiple = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
     ytDlpJsRuntimes: ['node', 'quickjs'],
+    ytDlpPotProviderEnabled: false,
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),

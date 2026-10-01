@@ -10,6 +10,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  */
 export const REPO_ROOT = join(__dirname, '..', '..');
 
+/** Pinned upstream bgutil provider source, installed during `npm install`. */
+export const BGUTIL_PROVIDER_ROOT = join(REPO_ROOT, '.bgutil-ytdlp-pot-provider');
+export const BGUTIL_PROVIDER_SERVER = join(BGUTIL_PROVIDER_ROOT, 'server', 'build', 'main.js');
+
 /**
  * Default local directory where scripts/install-yt-dlp.js places an automatically
  * downloaded yt-dlp binary during `npm install` (e.g. on Render's build step). Kept
@@ -17,6 +21,8 @@ export const REPO_ROOT = join(__dirname, '..', '..');
  * install, and gitignored so the binary itself is never committed.
  */
 export const YT_DLP_BIN_DIR = join(REPO_ROOT, 'bin');
+/** Standalone yt-dlp's documented executable-adjacent plugin directory. */
+export const BGUTIL_PROVIDER_PLUGIN_DIR = join(YT_DLP_BIN_DIR, 'yt-dlp-plugins');
 
 /** Platform-appropriate filename for the auto-installed binary. */
 export const YT_DLP_BIN_NAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
