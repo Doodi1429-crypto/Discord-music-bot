@@ -60,3 +60,16 @@ npm install
 npm test
 npm start
 ```
+
+## AI assistant
+
+AI chat is disabled by default. Set `AI_ENABLED=true` and provide `AI_API_KEY` to enable
+the OpenAI-compatible provider. Users can explicitly trigger it with `/ai message` (or
+mention the bot); `AI_TRIGGER` changes the prefix. `/ai reset` clears only that user's
+temporary conversation in the current guild/channel. Context is bounded by
+`AI_MAX_CONTEXT_MESSAGES` and is cleared when the process restarts.
+
+Available AI settings are `AI_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`,
+`AI_API_URL`, `AI_MAX_CONTEXT_MESSAGES`, `AI_MAX_RESPONSE_LENGTH`, `AI_SYSTEM_PROMPT`,
+`AI_TIMEOUT_MS`, and `AI_TRIGGER`. See `.env.example`; credentials and conversations
+are not logged.

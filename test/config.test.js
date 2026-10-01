@@ -9,7 +9,7 @@ const REQUIRED_ENV = {
 };
 
 function withEnv(overrides, fn) {
-  const keys = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID', 'LOGIN_TIMEOUT_MS'];
+  const keys = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID', 'LOGIN_TIMEOUT_MS', 'AI_ENABLED', 'AI_API_KEY', 'AI_MODEL', 'AI_TRIGGER'];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     for (const key of keys) delete process.env[key];
@@ -48,4 +48,24 @@ test('loadConfig honors a valid LOGIN_TIMEOUT_MS override', () => {
   withEnv({ LOGIN_TIMEOUT_MS: '5000' }, () => {
     assert.equal(loadConfig().loginTimeoutMs, 5000);
   });
+});
+
+test('loadConfig defaults AI to disabled and applies overrides', () => {
+  withEnv({ AI_MODEL: 'custom' }, () => {
+    const config = loadConfig();
+    assert.equal(config.ai.enabled, false);
+    assert.equal(config.ai.model, 'custom');
+    assert.equal(config.ai.trigger, '/ai');
+  });
+});
+
+test('loadConfig honors a custom AI trigger', () => {
+  withEnv({ AI_TRIGGER: '?ai' }, () => {
+    assert.equal(loadConfig().ai.trigger, '?ai');
+  });
+});
+
+test('loadConfig rejects enabled AI without credentials or invalid boolean', () => {
+  withEnv({ AI_ENABLED: 'true' }, () => assert.throws(() => loadConfig(), /AI_API_KEY/));
+  withEnv({ AI_ENABLED: 'maybe' }, () => assert.throws(() => loadConfig(), /AI_ENABLED/));
 });

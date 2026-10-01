@@ -5,6 +5,8 @@ import { userMessage } from './utils/errors.js';
 import { logger } from './utils/logger.js';
 import { loginWithTimeout } from './startup.js';
 import { startYtDlpPotProvider } from './resolvers/ytDlpPotProvider.js';
+import { AIService } from './ai/AIService.js';
+import { handleAIMessage } from './ai/discordHandler.js';
 import { data as join, execute as joinExecute } from './commands/join.js';
 import { data as play, execute as playExecute } from './commands/play.js';
 import { data as pause, execute as pauseExecute } from './commands/pause.js';
@@ -24,8 +26,11 @@ export const commands = [
 ];
 
 const config = loadConfig();
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+});
 const manager = new MusicManager(config);
+const aiService = config.ai.enabled ? new AIService(config.ai) : null;
 const commandMap = new Collection(commands.map(command => [command.data.name, command]));
 
 client.once('ready', ready => logger.info(`Logged in as ${ready.user.tag}`));
@@ -42,6 +47,10 @@ client.on('interactionCreate', async interaction => {
     if (interaction.deferred || interaction.replied) await interaction.editReply(content).catch(() => {});
     else await interaction.reply({ content, ephemeral: true }).catch(() => {});
   }
+});
+client.on('messageCreate', message => {
+  if (!aiService || message.author?.bot || !client.user?.id) return;
+  void handleAIMessage(message, { service: aiService, config: config.ai, botId: client.user.id, logger });
 });
 client.on('voiceStateUpdate', (oldState, newState) => {
   if (oldState.member?.id !== client.user?.id || newState.channelId) return;
