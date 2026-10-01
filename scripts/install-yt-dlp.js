@@ -8,6 +8,17 @@
 // rate limits); it downloads directly from the stable
 // `.../releases/latest/download/<asset>` redirect, which requires no token/auth.
 //
+// Standalone binaries (e.g. yt-dlp_linux) bundle yt-dlp-ejs per current official
+// yt-dlp EJS documentation (no separate EJS packages or remote components required).
+//
+// The installer executes `--version` and logs the installed version during build/install,
+// but the binary is not version-pinned; the live yt-dlp version running on Render
+// must be verified directly from Render's build/deploy logs.
+//
+// Current official yt-dlp documentation states `--js-runtimes node` requires Node >=22.
+// Although package.json specifies engines >=24.17.0, the live Node runtime installed
+// on Render must be verified from that deployment's environment/logs.
+//
 // Opt-outs (no credentials/bypasses involved, just configuration):
 //   - YOUTUBE_DL_PATH: if set, this script assumes the operator manages their own
 //     yt-dlp/youtube-dl binary and skips downloading entirely.

@@ -15,9 +15,13 @@ const MAX_ERROR_DETAILS_LENGTH = 1200;
 const UNAVAILABLE_PATTERN = /private|unavailable|removed|not available|geo.?restricted|region|age.?restrict|login required/i;
 // Matches Innertube's bot-detection challenge (e.g. "Sign in to confirm you're not a
 // bot"), as distinct from genuine user-input restrictions matched by UNAVAILABLE_PATTERN
-// above. This is an upstream YouTube/IP-reputation challenge rather than a problem with
-// the requested video, so it should allow the optional yt-dlp fallback to run instead of
-// being rejected outright as user input.
+// above. This is consistent with an upstream YouTube bot-verification challenge (which
+// may stem from IP reputation, rate limits, or player client requirements) rather than
+// a problem with the requested video, so it allows the optional yt-dlp fallback to run
+// instead of being rejected outright as user input. Only Render-side diagnostics can
+// establish the precise trigger; if yt-dlp's normal defaults still encounter the challenge,
+// no code-only config change can guarantee bypassing it without operator-supplied PO tokens,
+// provider plugins, or authentication.
 const BOT_CHECK_PATTERN = /not a bot|automated (queries|requests)/i;
 
 /**
@@ -90,10 +94,13 @@ export function resolveYtDlpCookiesPath(cookiesPath = process.env.YOUTUBE_DL_COO
  * Default JavaScript runtime passed to yt-dlp via `--js-runtimes`.
  * Modern yt-dlp requires an external JavaScript runtime to solve YouTube's
  * JavaScript player challenges (e.g. signature deciphering and n-parameter challenges).
- * yt-dlp enables only 'deno' by default; in Node.js container environments like Render,
- * Deno is not installed, causing yt-dlp to find 0 JS runtimes and fail with bot/signature
- * errors. Explicitly enabling 'node' ensures yt-dlp solves challenges using the
- * environment's existing Node.js runtime without requiring account credentials or cookies.
+ * Official yt-dlp documentation states Node is enabled via `--js-runtimes node` and
+ * requires Node >=22. The official standalone Linux binary (`yt-dlp_linux`) bundles
+ * yt-dlp-ejs per current official EJS documentation.
+ *
+ * Note: While this package specifies engines >=24.17.0, the live Node runtime version
+ * running on Render must be verified from that deployment's build and runtime logs.
+ * Setting YOUTUBE_DL_JS_RUNTIMES to 'none' or empty string disables passing `--js-runtimes`.
  */
 export const DEFAULT_YT_DLP_JS_RUNTIMES = 'node';
 
@@ -113,18 +120,23 @@ export function resolveYtDlpJsRuntimes(jsRuntimes = process.env.YOUTUBE_DL_JS_RU
 }
 
 /**
- * Headless-appropriate default player client configuration passed to yt-dlp.
- * Prioritizes `mweb` (recommended by yt-dlp devs in the PO-Token-Guide for headless
- * environments and token provider plugins) with `default` (`visionos,web`) as fallback.
- * Note: YouTube actively subjects datacenter IP ranges (e.g. Render) to bot checks;
- * no tokenless or fixed player client setting universally bypasses bot challenges
- * without operator-provided PO tokens, provider plugins, or cookies.
+ * Default player client configuration passed to yt-dlp.
+ * Defaults to null (unset), leaving yt-dlp's built-in client selection policy in
+ * control when the operator has not configured YOUTUBE_DL_PLAYER_CLIENT.
+ *
+ * Current official YouTube extractor documentation notes that yt-dlp uses default
+ * clients that currently do not require PO tokens, and recommends `mweb` *with a PO Token*
+ * when defaults fail. Therefore, unconditionally forcing `player_client=mweb,default`
+ * is not supported as a general no-token headless configuration. Operators can
+ * explicitly set YOUTUBE_DL_PLAYER_CLIENT (e.g. `mweb` when pairing with a PO token)
+ * or disable it with 'none'.
  */
-export const DEFAULT_YT_DLP_PLAYER_CLIENT = 'mweb,default';
+export const DEFAULT_YT_DLP_PLAYER_CLIENT = null;
 
 /**
  * Resolves operator-configurable player client(s) to pass via `--extractor-args "youtube:player_client=..."`.
- * Defaults to `DEFAULT_YT_DLP_PLAYER_CLIENT`. Setting to empty string or 'none' disables passing player_client.
+ * Defaults to `DEFAULT_YT_DLP_PLAYER_CLIENT` (null, leaving yt-dlp's built-in policy in control).
+ * Setting to empty string or 'none' disables passing player_client.
  */
 export function resolveYtDlpPlayerClient(playerClient = process.env.YOUTUBE_DL_PLAYER_CLIENT) {
   if (playerClient === undefined) return DEFAULT_YT_DLP_PLAYER_CLIENT;

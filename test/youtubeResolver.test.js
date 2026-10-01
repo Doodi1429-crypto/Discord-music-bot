@@ -252,7 +252,6 @@ test('falls back to an explicitly configured yt-dlp binary only after built-in r
     [
       '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
       '--js-runtimes', 'node',
-      '--extractor-args', 'youtube:player_client=mweb,default',
       'https://youtube.com/watch?v=abcdefghijk'
     ],
     { timeout: 30_000 }
@@ -282,13 +281,11 @@ test('search falls back to yt-dlp only after built-in search fails', async () =>
     [
       '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best',
       '--js-runtimes', 'node',
-      '--extractor-args', 'youtube:player_client=mweb,default',
       'ytsearch1:some song'
     ],
     [
       '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
       '--js-runtimes', 'node',
-      '--extractor-args', 'youtube:player_client=mweb,default',
       'https://www.youtube.com/watch?v=abcdefghijk'
     ]
   ]);
@@ -325,7 +322,6 @@ test('yt-dlp fallback resolution passes configured config/cookies paths as discr
       '--js-runtimes', 'node',
       '--config-location', '/etc/yt-dlp/config.conf',
       '--cookies', '/secrets/cookies.txt',
-      '--extractor-args', 'youtube:player_client=mweb,default',
       'https://youtube.com/watch?v=abcdefghijk'
     ],
     { timeout: 30_000 }
@@ -358,7 +354,6 @@ test('yt-dlp search fallback passes configured config/cookies paths as discrete 
       '--js-runtimes', 'node',
       '--config-location', '/etc/yt-dlp/config.conf',
       '--cookies', '/secrets/cookies.txt',
-      '--extractor-args', 'youtube:player_client=mweb,default',
       'ytsearch1:some song'
     ],
     [
@@ -366,7 +361,6 @@ test('yt-dlp search fallback passes configured config/cookies paths as discrete 
       '--js-runtimes', 'node',
       '--config-location', '/etc/yt-dlp/config.conf',
       '--cookies', '/secrets/cookies.txt',
-      '--extractor-args', 'youtube:player_client=mweb,default',
       'https://www.youtube.com/watch?v=abcdefghijk'
     ]
   ]);
@@ -460,6 +454,7 @@ test('resolveYtDlpJsRuntimes resolves default node, trimmed strings, arrays, and
 
 test('resolveYtDlpPlayerClient resolves defaults, trimmed strings, and none/empty', () => {
   assert.equal(resolveYtDlpPlayerClient(undefined), DEFAULT_YT_DLP_PLAYER_CLIENT);
+  assert.equal(resolveYtDlpPlayerClient(undefined), null);
   assert.equal(resolveYtDlpPlayerClient(null), null);
   assert.equal(resolveYtDlpPlayerClient('  mweb,tv  '), 'mweb,tv');
   assert.equal(resolveYtDlpPlayerClient(''), null);
@@ -515,7 +510,6 @@ test('yt-dlp fallback resolution passes custom PO-token and provider as discrete
     [
       '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
       '--js-runtimes', 'node',
-      '--extractor-args', 'youtube:player_client=mweb,default',
       '--extractor-args', 'youtube:po_token=my_po_token_xyz',
       '--extractor-args', 'youtube:pot-provider=bgutil+http://pot.local:4444',
       'https://youtube.com/watch?v=abcdefghijk'
@@ -544,11 +538,67 @@ test('yt-dlp fallback resolution does not duplicate bgutil+ prefix if already pr
   assert.ok(!ytDlpInvocation[1].includes('bgutil+bgutil+'));
 });
 
-test('yt-dlp fallback resolution omits player_client when explicitly set to null/none', async () => {
+test('yt-dlp fallback resolution omits player_client by default and when explicitly set to null/none', async () => {
+  let ytDlpInvocation;
+  const defaultResolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  await defaultResolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+
+  assert.deepEqual(ytDlpInvocation, [
+    '/configured/yt-dlp',
+    [
+      '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
+      '--js-runtimes', 'node',
+      'https://youtube.com/watch?v=abcdefghijk'
+    ],
+    { timeout: 30_000 }
+  ]);
+
+  const nullResolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPlayerClient: null,
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  await nullResolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+  assert.ok(!ytDlpInvocation[1].includes('--extractor-args'));
+
+  const noneResolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPlayerClient: 'none',
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  await noneResolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+  assert.ok(!ytDlpInvocation[1].includes('--extractor-args'));
+});
+
+test('yt-dlp fallback resolution passes explicit player_client override when configured', async () => {
   let ytDlpInvocation;
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
-    ytDlpPlayerClient: null,
+    ytDlpPlayerClient: 'mweb',
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
     }),
@@ -565,16 +615,43 @@ test('yt-dlp fallback resolution omits player_client when explicitly set to null
     [
       '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
       '--js-runtimes', 'node',
+      '--extractor-args', 'youtube:player_client=mweb',
+      'https://youtube.com/watch?v=abcdefghijk'
+    ],
+    { timeout: 30_000 }
+  ]);
+
+  const resolverWithFallback = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPlayerClient: 'mweb,default',
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  await resolverWithFallback.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+
+  assert.deepEqual(ytDlpInvocation, [
+    '/configured/yt-dlp',
+    [
+      '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
+      '--js-runtimes', 'node',
+      '--extractor-args', 'youtube:player_client=mweb,default',
       'https://youtube.com/watch?v=abcdefghijk'
     ],
     { timeout: 30_000 }
   ]);
 });
 
-test('custom extractor args override default player_client and pass discrete entries', async () => {
+test('custom extractor args override explicit player_client and pass discrete entries', async () => {
   let ytDlpInvocation;
   const resolver = new YouTubeResolver({
     ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPlayerClient: 'mweb',
     ytDlpExtractorArgs: ['youtube:player_client=android', 'generic:foo=bar'],
     createClient: async () => fakeClient({
       info: () => { throw new Error('YouTube blocked this request'); }
@@ -593,6 +670,36 @@ test('custom extractor args override default player_client and pass discrete ent
       '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
       '--js-runtimes', 'node',
       '--extractor-args', 'youtube:player_client=android',
+      '--extractor-args', 'generic:foo=bar',
+      'https://youtube.com/watch?v=abcdefghijk'
+    ],
+    { timeout: 30_000 }
+  ]);
+});
+
+test('custom extractor args preserve explicit player_client when not overridden', async () => {
+  let ytDlpInvocation;
+  const resolver = new YouTubeResolver({
+    ytDlpBinaryPath: '/configured/yt-dlp',
+    ytDlpPlayerClient: 'mweb',
+    ytDlpExtractorArgs: 'generic:foo=bar',
+    createClient: async () => fakeClient({
+      info: () => { throw new Error('YouTube blocked this request'); }
+    }),
+    ytDlpRunner: async (...args) => {
+      ytDlpInvocation = args;
+      return { title: 'Fallback video', duration: 10, url: 'https://media.example/fallback', acodec: 'opus' };
+    }
+  });
+
+  await resolver.resolveVideoUrl('https://youtube.com/watch?v=abcdefghijk');
+
+  assert.deepEqual(ytDlpInvocation, [
+    '/configured/yt-dlp',
+    [
+      '--dump-single-json', '--no-warnings', '--format', 'bestaudio/best', '--no-playlist',
+      '--js-runtimes', 'node',
+      '--extractor-args', 'youtube:player_client=mweb',
       '--extractor-args', 'generic:foo=bar',
       'https://youtube.com/watch?v=abcdefghijk'
     ],
