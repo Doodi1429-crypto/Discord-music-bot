@@ -86,6 +86,50 @@ export function resolveYtDlpCookiesPath(cookiesPath = process.env.YOUTUBE_DL_COO
   return cookiesPath?.trim() || null;
 }
 
+/**
+ * Headless-appropriate default player client configuration passed to yt-dlp.
+ * Prioritizes `mweb` (recommended by yt-dlp devs in the PO-Token-Guide for headless
+ * environments and token provider plugins) with `default` (`visionos,web`) as fallback.
+ * Note: YouTube actively subjects datacenter IP ranges (e.g. Render) to bot checks;
+ * no tokenless or fixed player client setting universally bypasses bot challenges
+ * without operator-provided PO tokens, provider plugins, or cookies.
+ */
+export const DEFAULT_YT_DLP_PLAYER_CLIENT = 'mweb,default';
+
+/**
+ * Resolves operator-configurable player client(s) to pass via `--extractor-args "youtube:player_client=..."`.
+ * Defaults to `DEFAULT_YT_DLP_PLAYER_CLIENT`. Setting to empty string or 'none' disables passing player_client.
+ */
+export function resolveYtDlpPlayerClient(playerClient = process.env.YOUTUBE_DL_PLAYER_CLIENT) {
+  if (playerClient === undefined) return DEFAULT_YT_DLP_PLAYER_CLIENT;
+  const trimmed = playerClient.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'none') return null;
+  return trimmed;
+}
+
+/**
+ * Resolves an optional operator-configured PO Token string (e.g. `--extractor-args "youtube:po_token=..."`).
+ * Sensitive: masked in error diagnostics and logs.
+ */
+export function resolveYtDlpPoToken(poToken = process.env.YOUTUBE_DL_PO_TOKEN) {
+  return poToken?.trim() || null;
+}
+
+/**
+ * Resolves an optional PO Token provider service URL (e.g. `bgutil-ytdlp-pot-provider`).
+ * Passed to yt-dlp via `--extractor-args "youtube:pot-provider=bgutil+..."`.
+ */
+export function resolveYtDlpPotProviderUrl(providerUrl = process.env.YOUTUBE_DL_POT_PROVIDER_URL) {
+  return providerUrl?.trim() || null;
+}
+
+/**
+ * Resolves optional custom extractor args passed directly to yt-dlp via `--extractor-args`.
+ */
+export function resolveYtDlpExtractorArgs(extractorArgs = process.env.YOUTUBE_DL_EXTRACTOR_ARGS) {
+  return extractorArgs?.trim() || null;
+}
+
 function runYtDlp(binaryPath, args, { timeout }) {
   return new Promise((resolve, reject) => {
     execFile(binaryPath, args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, timeout, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
@@ -105,12 +149,28 @@ function runYtDlp(binaryPath, args, { timeout }) {
   });
 }
 
-function errorDetails(error) {
+/**
+ * Sanitizes diagnostic strings before logging or surfacing them in errors, ensuring
+ * that any operator-configured PO tokens or extractor-args secrets are not exposed.
+ */
+export function sanitizeDetails(details, sensitiveValues = []) {
+  if (!details || typeof details !== 'string') return '';
+  let sanitized = details;
+  for (const value of sensitiveValues) {
+    if (value && typeof value === 'string' && value.length > 2) {
+      sanitized = sanitized.split(value).join('[REDACTED]');
+    }
+  }
+  return sanitized.replace(/(po_token=)[^\s;&"',]+/gi, '$1[REDACTED]');
+}
+
+export function errorDetails(error, sensitiveValues = []) {
   const details = error.stderr?.trim() || error.message || String(error);
   if (details === 'Error') {
     return 'yt-dlp failed without diagnostic output. Verify the yt-dlp binary and network access.';
   }
-  return details.slice(0, MAX_ERROR_DETAILS_LENGTH);
+  const sanitized = sanitizeDetails(details, sensitiveValues);
+  return sanitized.slice(0, MAX_ERROR_DETAILS_LENGTH);
 }
 
 /**
@@ -129,6 +189,10 @@ export class YouTubeResolver {
     ytDlpTimeout = 30_000,
     ytDlpConfigPath = resolveYtDlpConfigPath(),
     ytDlpCookiesPath = resolveYtDlpCookiesPath(),
+    ytDlpPlayerClient = resolveYtDlpPlayerClient(),
+    ytDlpPoToken = resolveYtDlpPoToken(),
+    ytDlpPotProviderUrl = resolveYtDlpPotProviderUrl(),
+    ytDlpExtractorArgs = resolveYtDlpExtractorArgs(),
     resolveYtDlpBinary = resolveYtDlpPath
   } = {}) {
     this.createClient = createClient;
@@ -137,6 +201,10 @@ export class YouTubeResolver {
     this.ytDlpTimeout = ytDlpTimeout;
     this.ytDlpConfigPath = ytDlpConfigPath || null;
     this.ytDlpCookiesPath = ytDlpCookiesPath || null;
+    this.ytDlpPlayerClient = ytDlpPlayerClient ?? null;
+    this.ytDlpPoToken = ytDlpPoToken || null;
+    this.ytDlpPotProviderUrl = ytDlpPotProviderUrl || null;
+    this.ytDlpExtractorArgs = ytDlpExtractorArgs || null;
     this.resolveYtDlpBinary = resolveYtDlpBinary;
     this.clientPromise = null;
   }
@@ -289,6 +357,48 @@ export class YouTubeResolver {
 
   // --- Optional yt-dlp fallback (not required; only used when an executable is configured) ---
 
+  buildExtractorArgs() {
+    const list = [];
+    const customArgsStr = Array.isArray(this.ytDlpExtractorArgs)
+      ? this.ytDlpExtractorArgs.join(';')
+      : (this.ytDlpExtractorArgs || '');
+
+    const hasClientInCustomArgs = /player[-_]client/i.test(customArgsStr);
+    const hasPoTokenInCustomArgs = /po[-_]token/i.test(customArgsStr);
+    const hasProviderInCustomArgs = /pot[-_]provider|youtubepot/i.test(customArgsStr);
+
+    if (this.ytDlpPlayerClient && !hasClientInCustomArgs) {
+      list.push(`youtube:player_client=${this.ytDlpPlayerClient}`);
+    }
+
+    if (this.ytDlpPoToken && !hasPoTokenInCustomArgs) {
+      list.push(`youtube:po_token=${this.ytDlpPoToken}`);
+    }
+
+    if (this.ytDlpPotProviderUrl && !hasProviderInCustomArgs) {
+      const provider = this.ytDlpPotProviderUrl.startsWith('bgutil+')
+        ? this.ytDlpPotProviderUrl
+        : `bgutil+${this.ytDlpPotProviderUrl}`;
+      list.push(`youtube:pot-provider=${provider}`);
+    }
+
+    if (this.ytDlpExtractorArgs) {
+      if (Array.isArray(this.ytDlpExtractorArgs)) {
+        list.push(...this.ytDlpExtractorArgs);
+      } else {
+        list.push(this.ytDlpExtractorArgs);
+      }
+    }
+
+    return list;
+  }
+
+  getErrorDetails(error) {
+    const sensitive = [];
+    if (this.ytDlpPoToken) sensitive.push(this.ytDlpPoToken);
+    return errorDetails(error, sensitive);
+  }
+
   async resolveViaYtDlp(url, binaryPath) {
     try {
       const info = await this.getYtDlpInfo(url, binaryPath);
@@ -309,7 +419,7 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
 
-      const details = errorDetails(error);
+      const details = this.getErrorDetails(error);
       logger.error('yt-dlp fallback resolution failed', { message: details });
       if (UNAVAILABLE_PATTERN.test(details)) {
         throw new UserInputError('This YouTube video is unavailable, private, or region-restricted.');
@@ -331,7 +441,7 @@ export class YouTubeResolver {
     } catch (error) {
       if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
 
-      const details = errorDetails(error);
+      const details = this.getErrorDetails(error);
       logger.error('yt-dlp search fallback failed', { query, message: details });
       throw new AudioSourceError(`Failed to search YouTube for "${query}": ${details}`);
     }
@@ -346,6 +456,11 @@ export class YouTubeResolver {
     // default invocation used when no such configuration is provided.
     if (this.ytDlpConfigPath) args.push('--config-location', this.ytDlpConfigPath);
     if (this.ytDlpCookiesPath) args.push('--cookies', this.ytDlpCookiesPath);
+
+    for (const extractorArg of this.buildExtractorArgs()) {
+      args.push('--extractor-args', extractorArg);
+    }
+
     args.push(url);
     return this.ytDlpRunner(binaryPath, args, { timeout: this.ytDlpTimeout });
   }
