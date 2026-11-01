@@ -106,7 +106,9 @@ test('resolveVideoUrl resolves audio metadata entirely via the built-in (youtube
     url: 'https://media.example/audio',
     title: 'A video',
     duration: 42,
-    source: 'youtube'
+    source: 'youtube',
+    pageUrl: 'https://www.youtube.com/watch?v=abcdefghijk',
+    thumbnail: null
   });
 });
 
@@ -184,7 +186,9 @@ test('search resolves the first video result via the built-in client', async () 
     url: 'https://media.example/abcdefghijk',
     title: 'Some song',
     duration: 200,
-    source: 'youtube'
+    source: 'youtube',
+    pageUrl: 'https://www.youtube.com/watch?v=abcdefghijk',
+    thumbnail: null
   });
 });
 
@@ -250,7 +254,9 @@ test('falls back to an explicitly configured yt-dlp binary only after built-in r
     url: 'https://media.example/fallback',
     title: 'Fallback video',
     duration: 10,
-    source: 'youtube'
+    source: 'youtube',
+    pageUrl: 'https://youtube.com/watch?v=abcdefghijk',
+    thumbnail: null
   });
   assert.deepEqual(ytDlpInvocation, [
     '/configured/yt-dlp',
@@ -397,7 +403,9 @@ test('falls back to yt-dlp when the built-in client reports a bot-check/sign-in 
     url: 'https://media.example/fallback',
     title: 'Fallback video',
     duration: 10,
-    source: 'youtube'
+    source: 'youtube',
+    pageUrl: 'https://youtube.com/watch?v=abcdefghijk',
+    thumbnail: null
   });
   assert.ok(ytDlpInvocation, 'expected yt-dlp to be invoked as a fallback');
 });

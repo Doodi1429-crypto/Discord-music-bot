@@ -519,7 +519,9 @@ export class YouTubeResolver {
       url: audioUrl,
       title: info.basic_info?.title || 'YouTube Video',
       duration: info.basic_info?.duration ?? null,
-      source: 'youtube'
+      source: 'youtube',
+      pageUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      thumbnail: info.basic_info?.thumbnail?.[0]?.url ?? null
     };
   }
 
@@ -635,7 +637,9 @@ export class YouTubeResolver {
         url: audioUrl,
         title: info.title || 'YouTube Video',
         duration: info.duration ?? null,
-        source: 'youtube'
+        source: 'youtube',
+        pageUrl: info.webpage_url || url,
+        thumbnail: info.thumbnail ?? null
       };
     } catch (error) {
       if (error instanceof UserInputError || error instanceof AudioSourceError) throw error;
@@ -681,6 +685,7 @@ export class YouTubeResolver {
     if (debug) args.push('--verbose');
     args.push('--format', 'bestaudio/best');
     if (extraFlags.noPlaylist !== false) args.push('--no-playlist');
+    if (extraFlags.playlistEnd) args.push('--flat-playlist', '--playlist-end', String(extraFlags.playlistEnd));
 
     if (this.ytDlpJsRuntimes) {
       const runtimes = Array.isArray(this.ytDlpJsRuntimes)

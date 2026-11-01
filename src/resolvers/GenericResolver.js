@@ -64,7 +64,9 @@ export class GenericResolver {
       url: audioUrl,
       title: info.title || safeHostname(url) || 'Media',
       duration: info.duration ?? null,
-      source: 'generic'
+      source: 'generic',
+      pageUrl: url,
+      thumbnail: info.thumbnail ?? null
     };
   }
 

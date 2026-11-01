@@ -1,3 +1,4 @@
 import { SlashCommandBuilder } from 'discord.js';
-export const data = new SlashCommandBuilder().setName('leave').setDescription('Leave voice and clear playback.');
-export async function execute(i, m) { const p = m.get(i.guild); p.ensureControl(i); p.leave(); return i.reply('Left the voice channel.'); }
+import { successEmbed } from '../ui/embeds.js';
+export const data = new SlashCommandBuilder().setName('leave').setDescription('مغادرة القناة الصوتية ومسح التشغيل');
+export async function execute(i, m) { const p = m.get(i.guild); p.ensureControl(i); m.remove(i.guild.id); return i.reply({ embeds: [successEmbed('غادرت القناة الصوتية 👋')] }); }

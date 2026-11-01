@@ -29,7 +29,7 @@ test('AudioSource.create rejects non-http(s) and local URLs before spawning ffmp
 });
 
 test('AudioSource.create surfaces a clear error when the ffmpeg binary cannot be found', async () => {
-  const source = new AudioSource({ ffmpegPath: '/definitely/not/a/real/ffmpeg-binary' });
+  const source = new AudioSource({ ffmpegPath: '/definitely/not/a/real/ffmpeg-binary', assertUrl: async (u) => new URL(u) });
   await assert.rejects(
     () => source.create({ url: 'https://example.com/audio.mp3' }),
     (error) => {
