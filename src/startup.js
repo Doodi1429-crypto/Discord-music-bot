@@ -1,4 +1,4 @@
-export const DEFAULT_LOGIN_TIMEOUT_MS = 30_000;
+export const DEFAULT_LOGIN_TIMEOUT_MS = 60_000;
 
 function loginTimeoutMessage(timeoutMs) {
   return `Timed out after ${timeoutMs}ms waiting for Discord login to complete. `

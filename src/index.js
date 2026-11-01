@@ -8,7 +8,8 @@ import { startYtDlpPotProvider } from './resolvers/ytDlpPotProvider.js';
 import { AIService } from './ai/AIService.js';
 import { handleAIMessage } from './ai/discordHandler.js';
 import { commands } from './commands/index.js';
-import { startHeartbeat } from './health.js';
+import { startHeartbeat, healthSnapshot } from './health.js';
+import { startHttpHealthServer } from './httpHealth.js';
 import { RateLimiter } from './utils/rateLimiter.js';
 import { acquireProcessLock } from './utils/processLock.js';
 import { errorEmbed } from './ui/embeds.js';
@@ -29,6 +30,7 @@ const userLimiter = new RateLimiter({ limit: 5, windowMs: 10_000 });
 const playLimiter = new RateLimiter({ limit: 5, windowMs: 60_000 });
 let releaseLock = () => {};
 let heartbeat = null;
+let stopHttp = async () => {};
 
 async function registerCommands() {
   if (process.env.REGISTER_COMMANDS?.trim().toLowerCase() === 'false') return;
@@ -93,6 +95,7 @@ async function shutdown(code = 0) {
   setTimeout(() => process.exit(code || 1), 8_000).unref();
   try {
     heartbeat?.stop();
+    await stopHttp();
     manager.destroyAll();
     await client.destroy();
     await stopPotProvider();
@@ -112,6 +115,15 @@ process.on('uncaughtException', (error) => {
   void shutdown(1);
 });
 
+async function logGatewayReachability() {
+  try {
+    const res = await fetch('https://discord.com/api/v10/gateway', { signal: AbortSignal.timeout(10_000) });
+    logger.info('Discord API reachable', { httpStatus: res.status });
+  } catch (error) {
+    logger.error('Discord API preflight failed', { name: error.name, code: error.cause?.code ?? error.code, message: error.message });
+  }
+}
+
 async function start() {
   try {
     releaseLock = acquireProcessLock();
@@ -119,16 +131,24 @@ async function start() {
     logger.error(error.message);
     process.exit(1);
   }
-  try {
-    const provider = await startYtDlpPotProvider();
-    stopPotProvider = provider.stop;
-    if (provider.started) logger.info('Local YouTube PO-token provider is ready.');
-  } catch (error) {
-    logger.error('Local YouTube PO-token provider failed to start; yt-dlp fallback may fail', {
-      message: error.message
-    });
-  }
+  stopHttp = startHttpHealthServer({
+    logger,
+    getStatus: () => { const { status, ready } = healthSnapshot(client, manager); return { status, ready }; }
+  }).stop;
 
+  // Started in the background so it can't delay or compete with the Discord login on a small host.
+  startYtDlpPotProvider()
+    .then(provider => {
+      stopPotProvider = provider.stop;
+      if (provider.started) logger.info('Local YouTube PO-token provider is ready.');
+    })
+    .catch(error => {
+      logger.error('Local YouTube PO-token provider failed to start; continuing without it (yt-dlp fallback may fail)', {
+        message: error.message
+      });
+    });
+
+  await logGatewayReachability();
   logger.info('Connecting to Discord gateway...');
   heartbeat = startHeartbeat({
     client, manager, intervalMs: config.heartbeatIntervalMs,
@@ -136,7 +156,7 @@ async function start() {
   });
   loginWithTimeout(client, config.token, { timeoutMs: config.loginTimeoutMs })
     .catch(error => {
-      logger.error('Login failed', { message: error.message });
+      logger.error('Login failed', { name: error.name, code: error.code ?? error.cause?.code, wsStatus: client.ws?.status, message: error.message });
       // Don't await destroy(): on the exact failure this guards against (a stuck/blackholed
       // connection), destroy() could hang for the same reason login did, which would defeat the
       // point of exiting promptly. Let it run best-effort in the background.
