@@ -1,8 +1,12 @@
 import { SlashCommandBuilder } from 'discord.js';
-export const data = new SlashCommandBuilder().setName('join').setDescription('Join your current voice channel.');
+import { successEmbed, errorEmbed } from '../ui/embeds.js';
+export const data = new SlashCommandBuilder().setName('join').setDescription('الانضمام إلى قناتك الصوتية');
 export async function execute(interaction, manager) {
   const channel = interaction.member.voice.channel;
-  if (!channel) return interaction.reply({ content: 'You must be in a voice channel.', ephemeral: true });
-  await manager.get(interaction.guild).join(channel);
-  return interaction.reply(`Joined **${channel.name}**.`);
+  if (!channel) return interaction.reply({ embeds: [errorEmbed('يجب أن تكون في قناة صوتية.')], ephemeral: true });
+  await interaction.deferReply();
+  const player = manager.get(interaction.guild);
+  player.textChannel = interaction.channel;
+  await player.join(channel);
+  return interaction.editReply({ embeds: [successEmbed(`انضممت إلى **${channel.name}** 🔊`)] });
 }

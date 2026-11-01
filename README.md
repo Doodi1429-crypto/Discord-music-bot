@@ -1,28 +1,57 @@
 # Discord Music Bot
 
-## Render deployment
+## Hosting (read this first)
 
-This repository has no Render blueprint or separate provider service. Keep the bot in
-its existing single Render Node service; the PO-token provider runs as a managed local
-child process inside that service.
+A Discord bot keeps an **outbound** WebSocket open to Discord. Render's free tier only supports
+*web services*, which are spun down after ~15 minutes without **inbound** HTTP traffic, and
+outbound connections or "messages to itself" do not count. So **free Render cannot run this bot
+24/7**, and no code can change that. HTTP self-pings are deliberately not used.
 
-In the existing service's **Settings → Build & Deploy**, use:
+The correct setup is a **Background Worker** (no port, never spun down for idleness). Render
+Background Workers are paid-only (cheapest: **Starter**). `render.yaml` defines exactly that.
+Alternatives with the same requirement: any always-on VPS/container host.
 
-- **Build Command:** `npm install`
-- **Start Command:** `npm start`
+### Deploy (manual; nothing deploys automatically)
 
-The checked-in `.node-version` selects Node.js 26.10.0. Keep the service's existing
-Discord environment variables (`DISCORD_TOKEN`, `CLIENT_ID`, and optional `GUILD_ID`).
-No second Render service, public provider port, personal YouTube account, cookies, or
-manually copied PO token is required.
+1. Render Dashboard → **New → Blueprint** → select this repository (or **New → Background Worker**
+   with Build `npm ci`, Start `npm start`). If you already have a *Web Service* for the bot,
+   create the worker and delete/suspend the web service so two bots never run at once.
+2. Set the secret environment variables (`DISCORD_TOKEN`, `CLIENT_ID`, optional `GUILD_ID`).
+3. Deploy. Slash commands register automatically on startup (`REGISTER_COMMANDS=false` disables
+   this; `npm run deploy-commands` registers manually). Using `GUILD_ID` makes them appear instantly;
+   global commands can take up to an hour.
+4. In the Discord Developer Portal enable the **Message Content** intent only if you use the AI
+   chat feature; music needs just Guilds + Voice States. Invite with the `bot` and
+   `applications.commands` scopes and Connect/Speak/Send Messages/Embed Links permissions.
 
-The `npm install` postinstall downloads standalone yt-dlp and the pinned upstream
-bgutil-ytdlp-pot-provider 2.0.0 source/plugin. It installs the provider's locked Node
-dependencies and pins the Axios override to 1.20.0, the first version reported as
-patched by the GitHub Advisory Database. The normal `npm start` command starts the
-provider before connecting the bot to Discord. The provider listens only on loopback
-(`127.0.0.1`, port 4416 by default); its unauthenticated HTTP endpoint must not be
-exposed through Render networking or a proxy.
+The `.node-version` file selects the Node.js version. `npm install` downloads standalone yt-dlp and
+the pinned bgutil PO-token provider, which runs as a loopback-only child process (port 4416; never
+expose it publicly).
+
+### Keep-alive, health and recovery
+
+- A heartbeat runs every 10 minutes (`HEARTBEAT_INTERVAL_MS`) and logs gateway status, ping, uptime,
+  guild count, voice connections and memory. If the gateway is not READY for 2 consecutive beats
+  the process exits non-zero so Render restarts the worker.
+- `/health` (needs *Manage Server*) shows the same snapshot inside Discord.
+- Voice: duplicate connections are prevented, failed joins log the exact cause (Signalling stuck,
+  WSS blocked, UDP handshake blocked, DAVE 4017, kicked 4014...), network drops are rejoined with
+  backoff (5 attempts), and a bot that is moved is followed. The bot leaves an empty channel after
+  `IDLE_LEAVE_MINUTES`.
+- SIGTERM/SIGINT shut down gracefully; unhandled rejections are logged, uncaught exceptions restart
+  the process. A PID lock file stops a second copy on the same machine (it cannot see other hosts).
+
+## Music
+
+Commands: `/play /pause /resume /skip /stop /queue /nowplaying /leave /volume /remove /clear
+/shuffle /loop /help` (plus `/join` and `/health`). `/play` accepts YouTube/SoundCloud URLs,
+YouTube/SoundCloud playlists (first 25 tracks), direct audio URLs, or a search; the optional
+`source` choice picks YouTube or SoundCloud (default: YouTube, then SoundCloud if YouTube fails).
+URLs are checked so loopback/private/link-local addresses are refused. ffmpeg only accepts
+http(s) inputs.
+
+Voice requires `@discordjs/voice` >= 0.19 and `@snazzah/davey` (Discord's mandatory DAVE end-to-end
+encryption; older versions are rejected with close code 4017).
 
 ## YouTube extraction
 

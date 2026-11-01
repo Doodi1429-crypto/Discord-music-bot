@@ -4,20 +4,7 @@ import ffmpegStatic from 'ffmpeg-static';
 import { createAudioResource, StreamType } from '@discordjs/voice';
 import { AudioSourceError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
-
-const blockedHosts = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
-
-function validateUrl(value) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new AudioSourceError('Please provide a valid http(s) media URL.');
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new AudioSourceError('Only http(s) media URLs are supported.');
-  if (blockedHosts.has(url.hostname.toLowerCase())) throw new AudioSourceError('Local URLs are not supported.');
-  return url;
-}
+import { assertPublicUrl } from '../resolvers/urlUtils.js';
 
 /**
  * Resolve the ffmpeg executable to use.
@@ -33,14 +20,16 @@ export function resolveFfmpegPath(ffmpegPath, { staticPath = ffmpegStatic, exist
 }
 
 export class AudioSource {
-  constructor({ ffmpegPath } = {}) {
+  constructor({ ffmpegPath, assertUrl = assertPublicUrl } = {}) {
     this.ffmpegPath = resolveFfmpegPath(ffmpegPath);
+    this.assertUrl = assertUrl;
   }
 
-  async create(track) {
-    const url = validateUrl(track.url);
+  async create(track, { volume = 1 } = {}) {
+    const url = await this.assertUrl(track.url, { ErrorType: AudioSourceError });
     const process = spawn(this.ffmpegPath, [
-      '-hide_banner', '-loglevel', 'error', '-nostdin', '-reconnect', '1',
+      '-hide_banner', '-loglevel', 'error', '-nostdin',
+      '-protocol_whitelist', 'http,https,tcp,tls,crypto', '-rw_timeout', '15000000', '-reconnect', '1',
       '-reconnect_streamed', '1', '-reconnect_delay_max', '5', '-i', url.href,
       '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -75,7 +64,8 @@ export class AudioSource {
     });
     await spawnResult;
 
-    const resource = createAudioResource(process.stdout, { inputType: StreamType.Raw, inlineVolume: false });
+    const resource = createAudioResource(process.stdout, { inputType: StreamType.Raw, inlineVolume: true });
+    resource.volume?.setVolume(volume);
     resource.process = process;
     resource.cleanup = () => {
       settled = true;

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GenericResolver } from '../src/resolvers/GenericResolver.js';
-import { AudioSourceError } from '../src/utils/errors.js';
+import { AudioSourceError, UserInputError } from '../src/utils/errors.js';
 
 /** Builds a fake yt-dlp runner, so no real binary/network access is needed in tests. */
 function fakeRunner(result) {
@@ -102,5 +102,3 @@ test('GenericResolver never references YOUTUBE_DL_PO_TOKEN/PLAYER_CLIENT/POT_PRO
     process.env = originalEnv;
   }
 });
-
-void UserInputError;

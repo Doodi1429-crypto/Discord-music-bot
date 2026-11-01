@@ -1,3 +1,4 @@
 import { SlashCommandBuilder } from 'discord.js';
-export const data = new SlashCommandBuilder().setName('resume').setDescription('Resume playback.');
-export async function execute(i, m) { m.get(i.guild).ensureControl(i); m.get(i.guild).resume(); return i.reply('Playback resumed.'); }
+import { successEmbed } from '../ui/embeds.js';
+export const data = new SlashCommandBuilder().setName('resume').setDescription('استئناف التشغيل');
+export async function execute(i, m) { const p = m.get(i.guild); p.ensureControl(i); p.resume(); return i.reply({ embeds: [successEmbed('تم استئناف التشغيل ▶️')] }); }

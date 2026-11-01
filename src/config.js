@@ -50,6 +50,10 @@ export function loadConfig() {
     // Both checks are required: Number(undefined) is NaN (rejected by isFinite), but
     // Number('') is 0, which is finite - the `> 0` check is what rejects an empty/blank value.
     loginTimeoutMs: Number.isFinite(loginTimeoutMs) && loginTimeoutMs > 0 ? loginTimeoutMs : DEFAULT_LOGIN_TIMEOUT_MS,
+    heartbeatIntervalMs: Math.floor(positiveNumber(process.env.HEARTBEAT_INTERVAL_MS, 600_000)),
+    defaultVolume: Math.min(100, Math.floor(positiveNumber(process.env.DEFAULT_VOLUME, 50))),
+    // 0 disables leaving an empty voice channel.
+    idleLeaveMs: process.env.IDLE_LEAVE_MINUTES?.trim() === '0' ? 0 : Math.floor(positiveNumber(process.env.IDLE_LEAVE_MINUTES, 10) * 60_000),
     ai: {
       enabled: aiEnabled,
       provider: aiProvider,

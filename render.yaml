@@ -1,0 +1,20 @@
+# Render Blueprint: the bot runs as a Background Worker (no HTTP port, never sleeps on idle).
+# Background Workers are paid-only on Render (no free tier); `starter` is the cheapest plan.
+# Nothing here deploys by itself: autoDeployTrigger is off, so deploys are manual.
+services:
+  - type: worker
+    name: discord-music-bot
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    autoDeployTrigger: "off"
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        sync: false
+      - key: GUILD_ID
+        sync: false
+      - key: LOG_LEVEL
+        value: info
