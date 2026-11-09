@@ -18,3 +18,6 @@ services:
         sync: false
       - key: LOG_LEVEL
         value: info
+      # Set to "true" temporarily to get the sanitized `yt-dlp diagnostic report` log line, then back to "false".
+      - key: YOUTUBE_DL_DEBUG
+        value: "false"

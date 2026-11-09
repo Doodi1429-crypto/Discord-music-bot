@@ -72,6 +72,14 @@ export class GuildPlayer {
     this.idleTimer = null;
     this.connectionListeners = new Map();
     this.watchedNetworking = new WeakSet();
+    this.player.on('stateChange', (oldState, newState) => {
+      const details = { guild: guild.id, from: oldState.status, to: newState.status, track: this.current?.title, voiceStatus: this.connection?.state?.status ?? 'none' };
+      if (newState.status === AudioPlayerStatus.AutoPaused) {
+        details.reason = 'no voice connection is subscribed or ready, so audio is not being sent';
+      }
+      if (newState.resource) details.playbackMs = newState.resource.playbackDuration;
+      logger.info('Audio player state changed', details);
+    });
     this.player.on(AudioPlayerStatus.Idle, () => this.finishCurrent());
     this.player.on('error', (error) => {
       logger.error('Audio player error', { guild: guild.id, track: this.current?.title, message: error.message });
@@ -134,7 +142,8 @@ export class GuildPlayer {
   attach(connection) {
     if (this.connection === connection) return;
     this.connection = connection;
-    connection.subscribe(this.player);
+    const subscription = connection.subscribe(this.player);
+    logger.info('Audio player subscribed to voice connection', { guild: this.guild.id, subscribed: Boolean(subscription), voiceStatus: connection.state?.status });
     const listeners = {
       stateChange: (oldState, newState) => {
         logger.info('Voice connection state changed', { guild: this.guild.id, from: oldState.status, to: newState.status });
@@ -168,7 +177,7 @@ export class GuildPlayer {
     if (!networking || this.watchedNetworking.has(networking)) return;
     this.watchedNetworking.add(networking);
     networking.on('stateChange', (oldS, newS) => {
-      logger.debug('Voice networking state', { guild: this.guild.id, from: oldS.code, to: newS.code });
+      logger.info('Voice networking state', { guild: this.guild.id, from: oldS.code, to: newS.code });
     });
     networking.on('error', (error) => logger.error('Voice networking error (UDP/WS/encryption)', { guild: this.guild.id, message: error.message }));
     networking.on('close', (code) => logger.warn('Voice WebSocket closed', { guild: this.guild.id, code }));
@@ -291,7 +300,7 @@ export class GuildPlayer {
   finishCurrent() {
     if (!this.current) return;
     const track = this.current;
-    logger.info('Track ended', { guild: this.guild.id, title: track.title });
+    logger.info('Track ended', { guild: this.guild.id, title: track.title, playbackMs: this.resource?.playbackDuration ?? null });
     const skipped = this.skipping;
     const failed = this.failing;
     this.skipping = false;

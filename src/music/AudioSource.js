@@ -19,14 +19,39 @@ export function resolveFfmpegPath(ffmpegPath, { staticPath = ffmpegStatic, exist
   return 'ffmpeg';
 }
 
+/** Loggable description of a stream URL: host and file extension only, never the path or signed query. */
+export function describeStreamUrl(url, streamInfo = {}) {
+  const extension = /\.([a-z0-9]{2,5})$/i.exec(url.pathname)?.[1]?.toLowerCase() ?? null;
+  return {
+    host: url.hostname,
+    urlProtocol: url.protocol.replace(':', ''),
+    urlExtension: extension,
+    protocol: streamInfo.protocol ?? null,
+    ext: streamInfo.ext ?? null,
+    acodec: streamInfo.acodec ?? null,
+    abr: streamInfo.abr ?? null
+  };
+}
+
+/** FFmpeg error text often echoes the input URL; reduce any URL to its origin so signed paths and queries never reach logs. */
+export function redactUrls(text) {
+  return text.replace(/\b(?:https?|rtmps?|tcp|tls):\/\/[^\s/'"]+[^\s'"]*/gi, (match) => {
+    try { return `${new URL(match).origin}/[REDACTED]`; } catch { return '[REDACTED_URL]'; }
+  });
+}
+
+const FLOW_CHECK_DELAYS_MS = [2000, 5000];
+
 export class AudioSource {
-  constructor({ ffmpegPath, assertUrl = assertPublicUrl } = {}) {
+  constructor({ ffmpegPath, assertUrl = assertPublicUrl, flowCheckDelaysMs = FLOW_CHECK_DELAYS_MS } = {}) {
     this.ffmpegPath = resolveFfmpegPath(ffmpegPath);
     this.assertUrl = assertUrl;
+    this.flowCheckDelaysMs = flowCheckDelaysMs;
   }
 
   async create(track, { volume = 1 } = {}) {
     const url = await this.assertUrl(track.url, { ErrorType: AudioSourceError });
+    logger.info('Audio stream selected', { title: track.title, source: track.source, ...describeStreamUrl(url, track.streamInfo) });
     const process = spawn(this.ffmpegPath, [
       '-hide_banner', '-loglevel', 'error', '-nostdin',
       '-protocol_whitelist', 'http,https,tcp,tls,crypto', '-rw_timeout', '15000000', '-reconnect', '1',
@@ -35,14 +60,17 @@ export class AudioSource {
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let settled = false;
+    const flowTimers = [];
     const cleanup = () => {
+      flowTimers.forEach(clearTimeout);
       if (!process.killed) process.kill('SIGKILL');
       process.stdout?.destroy();
       process.stderr?.destroy();
     };
     process.stderr.setEncoding('utf8');
-    process.stderr.on('data', (text) => logger.warn('FFmpeg', { message: text.trim().slice(-500) }));
-    process.on('close', (code) => {
+    process.stderr.on('data', (text) => logger.warn('FFmpeg', { message: redactUrls(text.trim()).slice(-500) }));
+    process.on('close', (code, signal) => {
+      logger.info('FFmpeg closed', { title: track.title, code, signal, bytesOut: process.stdout?.bytesRead ?? 0 });
       if (!settled && code && code !== 255) logger.warn('FFmpeg exited before playback ended', { code });
     });
 
@@ -67,6 +95,17 @@ export class AudioSource {
     const resource = createAudioResource(process.stdout, { inputType: StreamType.Raw, inlineVolume: true });
     resource.volume?.setVolume(volume);
     resource.process = process;
+    // bytesRead is a passive counter on the pipe; unlike a 'data' listener it cannot consume audio.
+    for (const delay of this.flowCheckDelaysMs) {
+      const timer = setTimeout(() => {
+        const bytesOut = process.stdout?.bytesRead ?? 0;
+        const payload = { title: track.title, afterMs: delay, bytesOut, playbackMs: resource.playbackDuration ?? null, ffmpegExited: process.exitCode !== null };
+        if (bytesOut > 0) logger.info('FFmpeg audio flowing', payload);
+        else logger.warn('FFmpeg produced no audio data', payload);
+      }, delay);
+      timer.unref?.();
+      flowTimers.push(timer);
+    }
     resource.cleanup = () => {
       settled = true;
       cleanup();
