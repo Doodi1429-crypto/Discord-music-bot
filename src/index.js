@@ -1,4 +1,4 @@
-import { Client, Collection, GatewayIntentBits } from 'discord.js';
+import { Client, Collection, GatewayIntentBits, Partials } from 'discord.js';
 import { loadConfig } from './config.js';
 import { MusicManager } from './music/MusicManager.js';
 import { arabicError } from './utils/errors.js';
@@ -19,9 +19,10 @@ export { commands };
 
 const config = loadConfig();
 const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates];
-if (config.ai.enabled) intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
+if (config.ai.enabled) intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent);
 const client = new Client({
-  intents
+  intents,
+  partials: config.ai.enabled ? [Partials.Channel] : []
 });
 const manager = new MusicManager(config);
 const aiService = config.ai.enabled ? new AIService(config.ai) : null;
@@ -73,7 +74,8 @@ client.on('interactionCreate', async interaction => {
 });
 client.on('messageCreate', message => {
   if (!aiService || message.author?.bot || !client.user?.id) return;
-  void handleAIMessage(message, { service: aiService, config: config.ai, botId: client.user.id, logger });
+  void handleAIMessage(message, { service: aiService, config: config.ai, botId: client.user.id, logger })
+    .catch(error => logger.error('Unexpected AI handler failure', { name: error?.name, code: error?.code, messageId: message.id, channel: message.channelId }));
 });
 client.on('voiceStateUpdate', (oldState, newState) => {
   // Bot disconnects are handled (and recovered from) by GuildPlayer's connection state machine.
