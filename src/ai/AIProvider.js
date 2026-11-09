@@ -39,21 +39,17 @@ export class AIProvider {
     logger.info('AI provider initialized', { provider, model });
   }
 
-  /**
-   * Best-effort extraction of a short, redacted error message/code from a failed
-   * provider HTTP response, for safe diagnostics only. Never throws: any failure to
-   * read/parse the body simply yields no message. The API key/authorization header
-   * are never part of a response body, but this still redacts defensively in case the
-   * provider ever echoes request fragments back in its error payload.
-   */
+  // Provider messages can echo conversation text. Log only bounded structured codes.
   async describeErrorResponse(response) {
     try {
       const text = await response.text?.();
       if (!text) return null;
-      let parsed;
-      try { parsed = JSON.parse(text); } catch { parsed = null; }
-      const raw = parsed?.error?.message || parsed?.error?.code || parsed?.message || text;
-      return redactSecrets(String(raw), [this.apiKey]).slice(0, 300);
+      const parsed = JSON.parse(text);
+      const safeCode = value => {
+        const code = String(value ?? '');
+        return /^[a-zA-Z0-9_.-]{1,80}$/.test(code) && !code.includes(this.apiKey) ? code : undefined;
+      };
+      return { providerCode: safeCode(parsed?.error?.code), providerType: safeCode(parsed?.error?.type || parsed?.error?.status) };
     } catch {
       return null;
     }
@@ -71,13 +67,17 @@ export class AIProvider {
         signal: controller.signal
       });
       if (!response.ok) {
-        const code = response.status === 429 ? 'rate_limit' : response.status >= 500 ? 'outage' : 'provider_failure';
-        const providerMessage = await this.describeErrorResponse(response);
+        const providerDetails = await this.describeErrorResponse(response);
+        const code = providerDetails?.providerCode === 'context_length_exceeded' ? 'context_too_large'
+          : response.status === 401 || response.status === 403 ? 'authentication'
+          : response.status === 404 ? 'model_or_endpoint_not_found'
+            : response.status === 429 ? 'rate_limit' : response.status >= 500 ? 'outage' : 'provider_failure';
         logger.warn('AI request failed', {
           provider: this.provider,
+          model: this.model,
           code,
           status: response.status,
-          providerMessage,
+          ...providerDetails,
           durationMs: Date.now() - started
         });
         const error = new AIProviderError(code);
@@ -85,18 +85,33 @@ export class AIProvider {
         throw error;
       }
       let body;
-      try { body = await response.json(); } catch { throw new AIProviderError('malformed_response'); }
-      const content = body?.choices?.[0]?.message?.content;
+      try { body = await response.json(); } catch (error) {
+        if (controller.signal.aborted) throw error;
+        throw new AIProviderError('malformed_response');
+      }
+      const choice = body?.choices?.[0];
+      const finishReason = choice?.finish_reason;
+      if (finishReason && finishReason !== 'stop') {
+        logger.warn('AI response incomplete', { provider: this.provider, model: this.model, finishReason, durationMs: Date.now() - started });
+        const error = new AIProviderError('incomplete_response');
+        error.logged = true;
+        throw error;
+      }
+      const content = choice?.message?.content;
       if (typeof content !== 'string') throw new AIProviderError('malformed_response');
-      logger.info('AI request completed', { provider: this.provider, durationMs: Date.now() - started });
+      if (!content.trim()) throw new AIProviderError('empty_response');
+      logger.info('AI request completed', {
+        provider: this.provider, model: this.model, durationMs: Date.now() - started, finishReason,
+        promptTokens: body?.usage?.prompt_tokens, completionTokens: body?.usage?.completion_tokens
+      });
       return content.trim();
     } catch (error) {
       if (error instanceof AIProviderError) {
-        if (!error.logged) logger.warn('AI request failed', { code: error.code, durationMs: Date.now() - started });
+        if (!error.logged) logger.warn('AI request failed', { provider: this.provider, model: this.model, code: error.code, durationMs: Date.now() - started });
         throw error;
       }
-      const code = error?.name === 'AbortError' ? 'timeout' : 'unavailable';
-      logger.warn('AI request failed', { code, durationMs: Date.now() - started });
+      const code = controller.signal.aborted ? 'timeout' : 'unavailable';
+      logger.warn('AI request failed', { provider: this.provider, model: this.model, code, name: error?.name, causeCode: error?.cause?.code, durationMs: Date.now() - started });
       throw new AIProviderError(code);
     } finally {
       clearTimeout(timer);

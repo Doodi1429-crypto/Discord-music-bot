@@ -103,9 +103,21 @@ existing defaults remain `gpt-4o-mini` and
 Users can trigger AI with `!ai message` (the legacy `/ai message` prefix also works) or
 mention the bot; `AI_TRIGGER` changes the configured prefix. `!ai reset` or `/ai reset`
 clears only that user's temporary conversation in the current guild/channel. Context is
-bounded by `AI_MAX_CONTEXT_MESSAGES` and is cleared when the process restarts.
+bounded by `AI_MAX_CONTEXT_MESSAGES` and is cleared when the process restarts. Every
+message, including follow-ups, must use a trigger; `/ai` is a text prefix, not a slash
+command. Direct messages also require a trigger.
+
+Requests in the same conversation are processed in order, and failed or undelivered
+responses are not saved to history. `AI_MAX_CONTEXT_BYTES` (default 64000) limits the
+UTF-8 size of the system prompt, history and current question; older complete turns are
+removed first. This is a conservative size guard, not a model-specific token count.
+The provider can still reject requests that exceed its model's token limits. The default
+request timeout is 60 seconds; `AI_TIMEOUT_MS` can be adjusted for slower models.
+Provider errors are logged with status and structured error codes, while Discord delivery
+errors include the processing stage and error code. Check the configured model and API
+key, provider quota, Message Content intent, and channel permissions if requests fail.
 
 Available AI settings are `AI_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`,
-`AI_API_URL`, `AI_MAX_CONTEXT_MESSAGES`, `AI_MAX_RESPONSE_LENGTH`, `AI_SYSTEM_PROMPT`,
+`AI_API_URL`, `AI_MAX_CONTEXT_MESSAGES`, `AI_MAX_CONTEXT_BYTES`, `AI_MAX_RESPONSE_LENGTH`, `AI_SYSTEM_PROMPT`,
 `AI_TIMEOUT_MS`, and `AI_TRIGGER`. `AI_MODEL` and `AI_API_URL` override the defaults for
 the selected provider. See `.env.example`; credentials and conversations are not logged.

@@ -9,7 +9,7 @@ const REQUIRED_ENV = {
 };
 
 function withEnv(overrides, fn) {
-  const keys = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID', 'LOGIN_TIMEOUT_MS', 'AI_ENABLED', 'AI_API_KEY', 'AI_PROVIDER', 'AI_MODEL', 'AI_API_URL', 'AI_TRIGGER'];
+  const keys = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID', 'LOGIN_TIMEOUT_MS', 'AI_ENABLED', 'AI_API_KEY', 'AI_PROVIDER', 'AI_MODEL', 'AI_API_URL', 'AI_TRIGGER', 'AI_TIMEOUT_MS', 'AI_MAX_CONTEXT_BYTES'];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     for (const key of keys) delete process.env[key];
@@ -100,4 +100,15 @@ test('loadConfig honors a custom AI trigger', () => {
 test('loadConfig rejects enabled AI without credentials or invalid boolean', () => {
   withEnv({ AI_ENABLED: 'true' }, () => assert.throws(() => loadConfig(), /AI_API_KEY/));
   withEnv({ AI_ENABLED: 'maybe' }, () => assert.throws(() => loadConfig(), /AI_ENABLED/));
+});
+
+test('AI timeout and context budget have defaults and honor overrides', () => {
+  withEnv({}, () => {
+    assert.equal(loadConfig().ai.timeoutMs, 60000);
+    assert.equal(loadConfig().ai.maxContextBytes, 64000);
+  });
+  withEnv({ AI_TIMEOUT_MS: '90000', AI_MAX_CONTEXT_BYTES: '2048' }, () => {
+    assert.equal(loadConfig().ai.timeoutMs, 90000);
+    assert.equal(loadConfig().ai.maxContextBytes, 2048);
+  });
 });

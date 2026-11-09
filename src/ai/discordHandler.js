@@ -16,7 +16,13 @@ export function parseAITrigger(content, { trigger, botId }) {
 export function splitResponse(text, maxLength = 2000) {
   if (!text) return [];
   const chunks = [];
-  for (let index = 0; index < text.length; index += maxLength) chunks.push(text.slice(index, index + maxLength));
+  for (let index = 0; index < text.length;) {
+    let end = Math.min(index + maxLength, text.length);
+    if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1]) && /[\uDC00-\uDFFF]/u.test(text[end])) end -= 1;
+    if (end === index) throw new RangeError('AI response chunk size is too small');
+    chunks.push(text.slice(index, end));
+    index = end;
+  }
   return chunks;
 }
 
@@ -24,19 +30,35 @@ export async function handleAIMessage(message, { service, config, botId, logger 
   const prompt = parseAITrigger(message.content || '', { trigger: config.trigger, botId });
   if (prompt === null) return false;
   const context = { guildId: message.guildId, channelId: message.channelId, userId: message.author.id };
-  if (prompt.toLowerCase() === 'reset') {
-    service.resetConversation(context);
-    await message.reply('تم مسح محادثتك في هذه القناة ✅');
-    return true;
-  }
-  if (!prompt) return true;
+  let stage = 'processing';
+  const metadata = { guild: context.guildId || 'dm', channel: context.channelId, user: context.userId, messageId: message.id };
   try {
-    await message.channel.sendTyping();
-    const response = await service.generateResponse(context, prompt);
-    for (const chunk of splitResponse(response, config.maxResponseLength)) await message.reply(chunk);
+    if (prompt.toLowerCase() === 'reset') {
+      await service.resetConversation(context);
+      stage = 'reset_reply';
+      await message.reply('تم مسح محادثتك في هذه القناة ✅');
+      return true;
+    }
+    if (!prompt) {
+      stage = 'prompt_reply';
+      await message.reply('اكتب سؤالك بعد أمر الذكاء الاصطناعي.');
+      return true;
+    }
+    void Promise.resolve().then(() => message.channel.sendTyping()).catch(error => {
+      logger.warn?.('AI typing indicator failed', { ...metadata, name: error?.name, code: error?.code });
+    });
+    stage = 'generation';
+    await service.generateResponse(context, prompt, async response => {
+      stage = 'delivery';
+      for (const chunk of splitResponse(response, config.maxResponseLength)) await message.reply(chunk);
+    });
   } catch (error) {
-    logger.warn?.('AI Discord request failed', { code: error instanceof AIProviderError ? error.code : 'unknown' });
-    await message.reply(AI_USER_ERROR).catch(() => {});
+    logger.warn?.('AI Discord request failed', { ...metadata, stage, name: error?.name, code: error instanceof AIProviderError ? error.code : error?.code, status: error?.status });
+    try {
+      await message.reply(error?.code === 'context_too_large' ? 'السؤال أو إعدادات السياق طويلة جداً. جرّب سؤالاً أقصر.' : AI_USER_ERROR);
+    } catch (replyError) {
+      logger.error?.('AI error notification delivery failed', { ...metadata, name: replyError?.name, code: replyError?.code, status: replyError?.status });
+    }
   }
   return true;
 }

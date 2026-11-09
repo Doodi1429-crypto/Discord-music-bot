@@ -63,9 +63,10 @@ export function loadConfig() {
         ? 'https://api.openai.com/v1/chat/completions'
         : 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'),
       maxContextMessages: Math.floor(positiveNumber(process.env.AI_MAX_CONTEXT_MESSAGES, 12)),
-      maxResponseLength: Math.min(2000, Math.floor(positiveNumber(process.env.AI_MAX_RESPONSE_LENGTH, 2000))),
+      maxContextBytes: Math.max(1, Math.floor(positiveNumber(process.env.AI_MAX_CONTEXT_BYTES, 64000))),
+      maxResponseLength: Math.max(2, Math.min(2000, Math.floor(positiveNumber(process.env.AI_MAX_RESPONSE_LENGTH, 2000)))),
       systemPrompt: process.env.AI_SYSTEM_PROMPT?.trim() || DEFAULT_AI_SYSTEM_PROMPT,
-      timeoutMs: Math.floor(positiveNumber(process.env.AI_TIMEOUT_MS, 15000)),
+      timeoutMs: Math.max(1, Math.floor(positiveNumber(process.env.AI_TIMEOUT_MS, 60000))),
       trigger: process.env.AI_TRIGGER?.trim() || '!ai'
     }
   };
