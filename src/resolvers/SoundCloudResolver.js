@@ -14,6 +14,13 @@ export function pickAudioUrl(info) {
     || null;
 }
 
+/** Non-sensitive description of the format yt-dlp selected, used only for diagnostics. */
+export function describeAudioSelection(info) {
+  const selected = info?.requested_downloads?.find((item) => item.url) ?? info;
+  if (!selected) return null;
+  return { protocol: selected.protocol ?? null, ext: selected.ext ?? null, acodec: selected.acodec ?? null, abr: selected.abr ?? null };
+}
+
 export function isSoundCloudPlaylistUrl(input) {
   try {
     const { pathname } = new URL(input);
@@ -62,6 +69,7 @@ export class SoundCloudResolver {
     if (!url) throw new AudioSourceError('تعذّر استخراج رابط صوتي قابل للتشغيل من SoundCloud.');
     return {
       url,
+      streamInfo: describeAudioSelection(info),
       title: info.title || 'SoundCloud',
       duration: info.duration ?? null,
       source: 'soundcloud',

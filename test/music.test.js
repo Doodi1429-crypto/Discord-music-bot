@@ -5,7 +5,7 @@ import { VoiceConnectionStatus, VoiceConnectionDisconnectReason, NetworkingStatu
 import { GuildPlayer, describeVoiceState } from '../src/music/GuildPlayer.js';
 import { MusicManager } from '../src/music/MusicManager.js';
 import { SourceResolver } from '../src/resolvers/SourceResolver.js';
-import { SoundCloudResolver } from '../src/resolvers/SoundCloudResolver.js';
+import { SoundCloudResolver, describeAudioSelection } from '../src/resolvers/SoundCloudResolver.js';
 import { UserInputError, AudioSourceError } from '../src/utils/errors.js';
 import { commands } from '../src/commands/index.js';
 import { healthSnapshot, startHeartbeat } from '../src/health.js';
@@ -236,4 +236,39 @@ test('heartbeat logs health, and requests a restart after consecutive unhealthy 
   assert.equal(restarts, 1);
   hb.stop();
   assert.equal(healthSnapshot(client, { players: new Map() }).status, 'DISCONNECTED');
+});
+
+test('audio player state transitions are logged at info level, with a reason for AutoPaused', () => {
+  const { player } = makePlayer();
+  const lines = [];
+  const original = console.log;
+  console.log = (line) => lines.push(String(line));
+  try {
+    player.player.emit('stateChange', { status: 'playing' }, { status: 'autopaused' });
+  } finally { console.log = original; }
+  assert.match(lines.join('\n'), /\[INFO\] Audio player state changed.*"to":"autopaused".*no voice connection is subscribed/);
+});
+
+test('voice networking state changes and the player subscription are logged at info level', async () => {
+  const { player, connections } = makePlayer();
+  const lines = [];
+  const original = console.log;
+  console.log = (line) => lines.push(String(line));
+  try {
+    await player.join(channel());
+    const networking = new EventEmitter();
+    connections[0].setState({ status: VoiceConnectionStatus.Connecting, networking });
+    networking.emit('stateChange', { code: 1 }, { code: 2 });
+  } finally { console.log = original; }
+  const output = lines.join('\n');
+  assert.match(output, /\[INFO\] Audio player subscribed to voice connection/);
+  assert.match(output, /\[INFO\] Voice networking state.*"from":1,"to":2/);
+});
+
+test('SoundCloud tracks carry non-sensitive stream format info for diagnostics', () => {
+  const resolver = new SoundCloudResolver({ ytDlpBinaryPath: 'yt-dlp' });
+  const track = resolver.toTrack({ title: 'x', requested_downloads: [{ url: 'https://cdn.example/a?sig=S', protocol: 'm3u8_native', ext: 'mp3', acodec: 'mp3', abr: 128 }] });
+  assert.deepEqual(track.streamInfo, { protocol: 'm3u8_native', ext: 'mp3', acodec: 'mp3', abr: 128 });
+  assert.equal(track.url, 'https://cdn.example/a?sig=S');
+  assert.equal(describeAudioSelection(null), null);
 });

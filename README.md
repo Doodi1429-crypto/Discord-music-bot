@@ -63,6 +63,16 @@ existing `YOUTUBE_DL_PATH`, `YOUTUBE_DL_JS_RUNTIMES`, extractor/config options, 
 `YOUTUBE_DL_DEBUG` diagnostics remain supported. The provider URL can only be configured
 to a localhost/loopback HTTP address.
 
+To diagnose a YouTube rejection, set `YOUTUBE_DL_DEBUG=true` (declared as `false` in
+`render.yaml`), redeploy, reproduce once, and read the `yt-dlp diagnostic report` log line.
+Cookies, PO tokens and signed URLs are redacted, and yt-dlp error output is omitted when a
+cookie file is configured. Set it back to `false` afterwards.
+
+Playback diagnostics logged at `info` level: `Audio stream selected` (host/format only, never
+the signed URL), `FFmpeg audio flowing` / `FFmpeg produced no audio data` (2s and 5s after
+start), `Audio player state changed` (including `autopaused`), `Audio player subscribed to voice
+connection`, `Voice connection state changed` and `Voice networking state`.
+
 Supported provider settings:
 
 - `YOUTUBE_DL_POT_PROVIDER_ENABLED`: defaults to `true`; set to `false` to disable the
